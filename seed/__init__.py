@@ -8,6 +8,14 @@ from seed.defect_factory import (
 )
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.run_seed import main
+from seed.telemetry_generators import (
+    calculate_series_stddev,
+    count_out_of_order_inversions,
+    generate_sensor_telemetry_series,
+    generate_telemetry_dataset,
+    inject_flatlining_anomaly,
+    inject_out_of_order_anomaly,
+)
 from seed.upsert_engine import (
     TABLE_UPSERT_REGISTRY,
     TOPOLOGICAL_TABLE_ORDER,
@@ -29,5 +37,11 @@ __all__ = [
     "TableUpsertConfig",
     "UpsertEngine",
     "calculate_database_checksum",
+    "calculate_series_stddev",
+    "count_out_of_order_inversions",
+    "generate_sensor_telemetry_series",
+    "generate_telemetry_dataset",
+    "inject_flatlining_anomaly",
+    "inject_out_of_order_anomaly",
     "main",
 ]
