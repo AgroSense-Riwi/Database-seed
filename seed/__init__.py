@@ -8,6 +8,8 @@ from seed.defect_factory import (
 )
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.run_seed import main
+from seed.spatial import PostGISSpatialGenerator, SpatialOverlapGenerator
+from seed.spatial_models import SpatialOverlapResult, SpatialPolygonResult
 from seed.telemetry_generators import (
     calculate_series_stddev,
     count_out_of_order_inversions,
@@ -32,6 +34,10 @@ __all__ = [
     "DefectFactory",
     "DefectReport",
     "InjectedDefectRecord",
+    "PostGISSpatialGenerator",
+    "SpatialOverlapGenerator",
+    "SpatialOverlapResult",
+    "SpatialPolygonResult",
     "TABLE_UPSERT_REGISTRY",
     "TOPOLOGICAL_TABLE_ORDER",
     "TableUpsertConfig",

@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import random
 import uuid
+from typing import Any
 
 from seed.spatial_geometry import (
     point_in_polygon,
@@ -22,6 +23,7 @@ from seed.spatial_geometry import (
 from seed.spatial_models import (
     AGROSENSE_NAMESPACE,
     COFFEE_REGION_BOUNDS,
+    SpatialOverlapResult,
     SpatialPolygonResult,
 )
 from seed.spatial_models import (
@@ -387,3 +389,231 @@ class PostGISSpatialGenerator:
             is_valid_coords=is_valid,
             overlaps_reserve=overlaps,
         )
+
+
+class SpatialOverlapGenerator:
+    """PostGIS spatial overlap generator for farm perimeters and protected forest reserves.
+
+    Implements ST_Intersects detection and defect injection for zero-deforestation
+    compliance testing (DEF-06 / DEF-07, RN-09, CA-08).
+    """
+
+    def __init__(self, seed: int = 42) -> None:
+        self.seed = int(seed)
+        self.rng = random.Random(self.seed)
+        self.spatial_gen = PostGISSpatialGenerator(seed=self.seed)
+
+    def check_intersection(
+        self,
+        poly_a: list[tuple[float, float]],
+        poly_b: list[tuple[float, float]],
+    ) -> bool:
+        """Check whether two closed polygonal rings intersect (ST_Intersects).
+
+        Args:
+            poly_a: First polygon vertex list [(lon, lat), ...].
+            poly_b: Second polygon vertex list [(lon, lat), ...].
+
+        Returns:
+            bool: True if geometries intersect, touch, or contain one another.
+        """
+        return self.spatial_gen.polygons_intersect(poly_a, poly_b)
+
+    def calculate_overlap_area_ha(
+        self,
+        farm_area_ha: float,
+        reserve_area_ha: float,
+        farm_points: list[tuple[float, float]],
+        reserve_points: list[tuple[float, float]],
+    ) -> float:
+        """Calculate realistic physical overlap area in hectares.
+
+        Bounded between 0.1 ha and 45% of the farm area, respecting physical limits.
+
+        Args:
+            farm_area_ha: Total nominal area of the farm in hectares.
+            reserve_area_ha: Total area of the protected forest reserve.
+            farm_points: Vertices of the farm polygon.
+            reserve_points: Vertices of the forest reserve polygon.
+
+        Returns:
+            float: Overlap area in hectares rounded to 2 decimal places.
+        """
+        if farm_area_ha <= 0:
+            return 0.1
+
+        # Check vertex containment fraction
+        vertices = farm_points[:-1] if len(farm_points) > 1 else farm_points
+        inside_count = sum(
+            1 for pt in vertices if self.spatial_gen.point_in_polygon(pt, reserve_points)
+        )
+        total_count = len(vertices)
+        containment_ratio = (inside_count / total_count) if total_count > 0 else 0.25
+
+        # Bounded between 5% and 45% of farm area
+        ratio = max(0.05, min(0.45, containment_ratio))
+        overlap_ha = round(farm_area_ha * ratio + self.rng.uniform(-0.1, 0.1), 2)
+        return max(0.1, min(overlap_ha, round(farm_area_ha * 0.5, 2)))
+
+    def force_overlap_polygon(
+        self,
+        farm_code: str,
+        name: str,
+        reserve: SpatialPolygonResult,
+        area_ha: float | None = None,
+        sides: int = 6,
+    ) -> SpatialPolygonResult:
+        """Generate a farm polygon explicitly overlapping a designated forest reserve.
+
+        Args:
+            farm_code: Unique natural key of the farm (e.g. 'FIN-0010').
+            name: Farm property name.
+            reserve: Target protected forest reserve geometry.
+            area_ha: Optional target area in hectares.
+            sides: Number of sides/vertices.
+
+        Returns:
+            SpatialPolygonResult: Farm polygon guaranteed to intersect the reserve.
+        """
+        return self.spatial_gen.generate_farm_polygon(
+            farm_code=farm_code,
+            name=name,
+            area_ha=area_ha,
+            sides=sides,
+            force_reserve_overlap=reserve,
+        )
+
+    def create_overlap_record(
+        self,
+        farm_id: str,
+        farm_code: str,
+        reserve_id: str,
+        reserve_code: str,
+        overlap_area_ha: float,
+        defect_code: str = "DEF-06",
+        status: str = "NON_COMPLIANT",
+    ) -> SpatialOverlapResult:
+        """Create a deterministic SpatialOverlapResult entity.
+
+        Args:
+            farm_id: UUID of the farm entity.
+            farm_code: Natural code of the farm.
+            reserve_id: UUID of the protected forest reserve.
+            reserve_code: Natural code of the reserve.
+            overlap_area_ha: Surface area of intersection in hectares.
+            defect_code: Defect code ('DEF-06' or 'DEF-07').
+            status: Zero-deforestation compliance status ('NON_COMPLIANT').
+
+        Returns:
+            SpatialOverlapResult: Immutable dataclass instance.
+        """
+        natural_key = f"{farm_code}:{reserve_code}"
+        overlap_id = str(uuid.uuid5(AGROSENSE_NAMESPACE, natural_key))
+        return SpatialOverlapResult(
+            overlap_id=overlap_id,
+            farm_id=farm_id,
+            farm_code=farm_code,
+            reserve_id=reserve_id,
+            reserve_code=reserve_code,
+            overlap_area_ha=overlap_area_ha,
+            deforestation_free_status=status,
+            defect_code=defect_code,
+            verified_at="2026-10-13T05:00:00Z",
+        )
+
+    def generate_overlaps_for_dataset(
+        self,
+        farms: list[dict[str, Any]],
+        reserves: list[dict[str, Any]],
+        overlap_rate: float = 0.05,
+        defect_code: str = "DEF-06",
+    ) -> list[dict[str, Any]]:
+        """Orchestrate spatial overlap generation across synthetic dataset entities.
+
+        Ensures the specified fraction of farms physically intersects forest reserves,
+        updates farm spatial attributes, and generates farm_reserve_overlaps records.
+
+        Args:
+            farms: List of farm entity dictionaries.
+            reserves: List of forest reserve entity dictionaries with geom_ewkt / polygon_geojson.
+            overlap_rate: Probability of a farm having a reserve overlap (0.0 to 1.0).
+            defect_code: Defect code to tag ('DEF-06' by default).
+
+        Returns:
+            list[dict[str, Any]]: Records for the 'farm_reserve_overlaps' table.
+        """
+        if not farms or not reserves or overlap_rate <= 0.0:
+            return []
+
+        overlap_records: list[dict[str, Any]] = []
+
+        # Convert raw reserve dicts to SpatialPolygonResult for geometric testing
+        reserve_models: list[SpatialPolygonResult] = []
+        for r in reserves:
+            geojson = r.get("polygon_geojson", {})
+            coords = geojson.get("coordinates", [[]])[0]
+            points = [(round(p[0], 6), round(p[1], 6)) for p in coords] if coords else []
+            if points:
+                reserve_models.append(
+                    SpatialPolygonResult(
+                        entity_id=str(r.get("reserve_id", "")),
+                        entity_code=str(r.get("reserve_code", "")),
+                        name=str(r.get("name", "Reserva")),
+                        center_lat=float(points[0][1]),
+                        center_lon=float(points[0][0]),
+                        area_ha=float(r.get("area_ha", 500.0)),
+                        points=points,
+                        wkt=str(r.get("geom_ewkt", "")),
+                        geojson=geojson,
+                        is_valid_coords=True,
+                        overlaps_reserve=False,
+                    )
+                )
+
+        if not reserve_models:
+            return []
+
+        for idx, farm in enumerate(farms):
+            should_overlap = self.rng.random() < overlap_rate
+            if not should_overlap and not farm.get("overlaps_reserve", False):
+                continue
+
+            target_reserve = reserve_models[idx % len(reserve_models)]
+            farm_code = farm.get("farm_code", f"FIN-{idx:04d}")
+            farm_name = farm.get("name", f"Hacienda {farm_code}")
+            farm_area = float(farm.get("total_area_ha", 15.0))
+
+            # Force geometric intersection
+            overlapping_poly = self.force_overlap_polygon(
+                farm_code=farm_code,
+                name=farm_name,
+                reserve=target_reserve,
+                area_ha=farm_area,
+            )
+
+            # Update farm spatial metadata
+            farm["latitude"] = overlapping_poly.center_lat
+            farm["longitude"] = overlapping_poly.center_lon
+            farm["geom_ewkt"] = overlapping_poly.ewkt
+            farm["polygon_geojson"] = overlapping_poly.geojson
+            farm["overlaps_reserve"] = True
+            farm["deforestation_free_status"] = "NON_COMPLIANT"
+
+            overlap_ha = self.calculate_overlap_area_ha(
+                farm_area_ha=farm_area,
+                reserve_area_ha=target_reserve.area_ha,
+                farm_points=overlapping_poly.points,
+                reserve_points=target_reserve.points,
+            )
+
+            record = self.create_overlap_record(
+                farm_id=farm.get("farm_id", overlapping_poly.entity_id),
+                farm_code=farm_code,
+                reserve_id=target_reserve.entity_id,
+                reserve_code=target_reserve.entity_code,
+                overlap_area_ha=overlap_ha,
+                defect_code=defect_code,
+            )
+            overlap_records.append(record.to_dict())
+
+        return overlap_records
