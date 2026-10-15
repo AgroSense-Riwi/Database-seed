@@ -144,6 +144,7 @@ TABLE_UPSERT_REGISTRY: dict[str, TableUpsertConfig] = {
             "is_pilot_sensor_farm",
             "water_usage_m3_ton",
             "overlaps_reserve",
+            "has_valid_coords",
             "is_active",
             "geom_ewkt",
             "polygon_geojson",

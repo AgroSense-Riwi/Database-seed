@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "agrosense-bd-seed"
 version = "0.1.0"
 description = "AgroSense Café — Reproducible and Idempotent Data Seed for PostgreSQL"
@@ -10,6 +10,7 @@ dev = [
     "faker>=40.43.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "ruff>=0.4.0",
 ]
 
 [tool.ruff]
