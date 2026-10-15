@@ -1,60 +1,60 @@
-﻿#
- AgroSense Café — BD Seed
+# AgroSense Café — DB Seed
 
-Módulo de siembra de datos sintéticos para PostgreSQL. Extraído del repo principal [AgroSense-Caf-IoT-Monitoring-and-Traceability-Framework](https://github.com/Pbyte5/AgroSense-Caf-IoT-Monitoring-and-Traceability-Framework).
+Synthetic data seeding module for PostgreSQL. Extracted from the main repository [AgroSense-Caf-IoT-Monitoring-and-Traceability-Framework](https://github.com/Pbyte5/AgroSense-Caf-IoT-Monitoring-and-Traceability-Framework).
 
-## Estructura
+## Project Structure
 
 ```
-bd_seed/
-├── seed/                     # Módulo principal
+Database-seed/
+├── seed/                     # Main module
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── run_seed.py           # Orquestador CLI
-│   ├── faker_generators.py   # Generación sintética con Faker
-│   ├── records.py            # Generación de registros de muestra
-│   ├── upsert_engine.py      # Motor UPSERT idempotente (CT-06)
-│   ├── spatial.py            # Polígonos PostGIS EPSG:4326
-│   ├── spatial_geometry.py   # Helpers de geometría WGS84
-│   └── spatial_models.py     # Dataclasses y constantes espaciales
-├── tests/                    # Tests del módulo
+│   ├── run_seed.py           # CLI orchestrator
+│   ├── faker_generators.py   # Synthetic generation with Faker
+│   ├── records.py            # Sample records generation
+│   ├── upsert_engine.py      # Idempotent UPSERT engine (CT-06)
+│   ├── spatial.py            # PostGIS EPSG:4326 polygons
+│   ├── spatial_geometry.py   # WGS84 geometry helpers
+│   └── spatial_models.py     # Dataclasses and spatial constants
+├── tests/                    # Module test suite
 │   ├── test_faker_generators.py
 │   ├── test_idempotency_ct06.py
+│   ├── test_run_seed.py
 │   ├── test_spatial.py
 │   └── test_upsert_engine.py
 └── pyproject.toml
 ```
 
-## Instalación
+## Installation
 
 ```bash
 pip install faker>=40.43.0
-# o con uv:
+# or with uv:
 uv sync --group dev
 ```
 
-## Uso
+## Usage
 
 ```bash
-# Modo desarrollo (dataset ligero)
+# Development mode (lightweight dataset)
 python -m seed --mode dev --seed 42
 
-# Modo producción (volumen completo)
+# Production mode (full volume)
 python -m seed --mode prod --seed 42 --defect-rate 0.05
 
-# Con reset (TRUNCATE antes de sembrar)
+# With reset (TRUNCATE before seeding)
 python -m seed --mode dev --reset
 ```
 
-## Variables de entorno
+## Environment Variables
 
-| Variable | Valor por defecto | Descripción |
+| Variable | Default Value | Description |
 |---|---|---|
-| `SEED_PROFILE` | `dev` | Perfil de volumen (`dev` o `prod`) |
-| `SEED_RANDOM_STATE` | `42` | Semilla PRNG para reproducibilidad |
-| `SEED_DEFECT_GLOBAL_RATE` | `0.05` | Tasa de defectos sintéticos (0.0–1.0) |
-| `SEED_RESET_BEFORE_RUN` | `false` | Truncate antes de sembrar |
-| `SEED_DB_BATCH_SIZE` | `1000` | Tamaño de lote UPSERT |
+| `SEED_PROFILE` | `dev` | Volume profile (`dev` or `prod`) |
+| `SEED_RANDOM_STATE` | `42` | PRNG seed for reproducibility |
+| `SEED_DEFECT_GLOBAL_RATE` | `0.05` | Synthetic defect rate (0.0–1.0) |
+| `SEED_RESET_BEFORE_RUN` | `false` | Truncate tables before seeding |
+| `SEED_DB_BATCH_SIZE` | `1000` | Multi-row UPSERT batch size |
 
 ## Tests
 
