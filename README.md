@@ -10,6 +10,7 @@ Database-seed/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── run_seed.py           # CLI orchestrator
+│   ├── defect_factory.py     # Configurable defect injection engine (AGRO-05C)
 │   ├── faker_generators.py   # Synthetic generation with Faker
 │   ├── records.py            # Sample records generation
 │   ├── upsert_engine.py      # Idempotent UPSERT engine (CT-06)
@@ -17,6 +18,7 @@ Database-seed/
 │   ├── spatial_geometry.py   # WGS84 geometry helpers
 │   └── spatial_models.py     # Dataclasses and spatial constants
 ├── tests/                    # Module test suite
+│   ├── test_defect_factory.py
 │   ├── test_faker_generators.py
 │   ├── test_idempotency_ct06.py
 │   ├── test_run_seed.py

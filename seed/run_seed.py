@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from faker import Faker
 
+from seed.defect_factory import DefectFactory, DefectReport
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.records import generate_sample_seed_records, generate_spatial_seed_records
 from seed.upsert_engine import (
@@ -26,6 +27,13 @@ from seed.upsert_engine import (
 )
 
 logger = logging.getLogger("agrosense.seed")
+
+_LAST_DEFECT_REPORT: DefectReport | None = None
+
+
+def get_last_defect_report() -> DefectReport | None:
+    """Retorna el reporte de la última ejecución de inyección de defectos."""
+    return _LAST_DEFECT_REPORT
 
 
 @dataclass(frozen=True)
@@ -265,7 +273,20 @@ def run_seed(
             len(dataset.get("iot_sensors", [])),
         )
 
-        # 3. Motor de Idempotencia UPSERT y preparación de sentencias SQL
+        # 3. Inyección configurable de defectos de calidad de datos (AGRO-05C)
+        global _LAST_DEFECT_REPORT
+        defect_factory = DefectFactory(defect_rate=config.defect_rate, seed=config.seed)
+        dataset = defect_factory.apply(dataset)
+        _LAST_DEFECT_REPORT = defect_factory.report
+        summary = defect_factory.get_summary()
+        logger.info(
+            "DefectFactory (AGRO-05C): %d defectos inyectados (rate=%.2f). Resumen: %s",
+            summary["total_defects_injected"],
+            summary["global_defect_rate"],
+            summary["defects_by_code"],
+        )
+
+        # 4. Motor de Idempotencia UPSERT y preparación de sentencias SQL
         engine = UpsertEngine(batch_size=config.batch_size)
 
         if config.reset:

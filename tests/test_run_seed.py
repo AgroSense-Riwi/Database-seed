@@ -170,7 +170,7 @@ def test_run_seed_exception_handling(monkeypatch):
     """Verify that run_seed catches exceptions and returns exit code 1."""
     config = SeedConfig(mode="dev", seed=42, defect_rate=0.05, reset=False)
     monkeypatch.setattr(
-        "scripts.seed.run_seed.set_reproducible_state",
+        "seed.run_seed.set_reproducible_state",
         lambda _: (_ for _ in ()).throw(RuntimeError("Simulated seed failure")),
     )
     exit_code = run_seed(config)
@@ -184,7 +184,7 @@ def test_main_entrypoint():
 
 def test_main_entrypoint_failure(monkeypatch):
     """Verify that main raises SystemExit with non-zero code on failure."""
-    monkeypatch.setattr("scripts.seed.run_seed.run_seed", lambda _: 1)
+    monkeypatch.setattr("seed.run_seed.run_seed", lambda _: 1)
     with pytest.raises(SystemExit) as exc_info:
         main([])
     assert exc_info.value.code == 1

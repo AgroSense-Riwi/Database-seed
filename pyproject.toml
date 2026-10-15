@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "agrosense-bd-seed"
 version = "0.1.0"
 description = "AgroSense Café — Reproducible and Idempotent Data Seed for PostgreSQL"
