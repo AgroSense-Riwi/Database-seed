@@ -14,18 +14,23 @@ Database-seed/
 │   ├── faker_generators.py   # Synthetic generation with Faker
 │   ├── records.py            # Sample records generation
 │   ├── upsert_engine.py      # Idempotent UPSERT engine (CT-06)
-│   ├── spatial.py            # PostGIS EPSG:4326 polygons
+│   ├── spatial.py            # PostGIS EPSG:4326 polygons & spatial overlap
 │   ├── spatial_geometry.py   # WGS84 geometry helpers
-│   └── spatial_models.py     # Dataclasses and spatial constants
+│   ├── spatial_models.py     # Dataclasses and spatial constants
+│   └── telemetry_generators.py # IoT telemetry anomaly generators (DEF-01, DEF-02)
 ├── tests/                    # Module test suite
 │   ├── test_defect_factory.py
+│   ├── test_defect_frequency_suite.py
 │   ├── test_faker_generators.py
 │   ├── test_idempotency_ct06.py
 │   ├── test_run_seed.py
 │   ├── test_spatial.py
+│   ├── test_spatial_overlap.py
+│   ├── test_telemetry_generators.py
 │   └── test_upsert_engine.py
 └── pyproject.toml
 ```
+
 
 ## Installation
 
