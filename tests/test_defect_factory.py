@@ -3,10 +3,7 @@
 import pytest
 
 from seed.defect_factory import (
-    DEFAULT_BASE_DEFECT_RATES,
     DefectFactory,
-    DefectReport,
-    InjectedDefectRecord,
 )
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.run_seed import get_last_defect_report, run_seed
@@ -52,12 +49,17 @@ def test_determinism_across_runs(sample_dataset):
     factory2 = DefectFactory(defect_rate=0.10, seed=42)
     mutated2 = factory2.apply(sample_dataset)
 
+    assert mutated1 == mutated2
     assert factory1.report.total_injected == factory2.report.total_injected
     assert factory1.report.counts_by_code == factory2.report.counts_by_code
 
     # Check that identical records were modified
-    injections1 = [(i.defect_code, i.entity_id, i.field_modified) for i in factory1.report.injections]
-    injections2 = [(i.defect_code, i.entity_id, i.field_modified) for i in factory2.report.injections]
+    injections1 = [
+        (i.defect_code, i.entity_id, i.field_modified) for i in factory1.report.injections
+    ]
+    injections2 = [
+        (i.defect_code, i.entity_id, i.field_modified) for i in factory2.report.injections
+    ]
     assert injections1 == injections2
 
 
@@ -145,20 +147,42 @@ def test_def07_reserve_overlap_injection(sample_dataset):
 def test_telemetries_injection_support():
     """Verify DefectFactory also injects anomalies when iot_telemetries exist."""
     telemetries = [
-        {"telemetry_id": "TEL-1", "sensor_id": "S-1", "reading_timestamp": "2026-10-15T10:00:00Z"},
-        {"telemetry_id": "TEL-2", "sensor_id": "S-2", "reading_timestamp": "2026-10-15T10:00:00Z"},
+        {
+            "telemetry_id": "TEL-1",
+            "sensor_id": "S-1",
+            "reading_timestamp": "2026-10-15T10:00:00Z",
+        },
+        {
+            "telemetry_id": "TEL-2",
+            "sensor_id": "S-2",
+            "reading_timestamp": "2026-10-15T10:00:00Z",
+        },
     ]
     sensors = [
-        {"sensor_id": "S-1", "status": "ACTIVE", "health_status": "ACTIVE", "clock_drift_seconds": 0},
-        {"sensor_id": "S-2", "status": "ACTIVE", "health_status": "ACTIVE", "clock_drift_seconds": 0},
+        {
+            "sensor_id": "S-1",
+            "status": "ACTIVE",
+            "health_status": "ACTIVE",
+            "clock_drift_seconds": 0,
+        },
+        {
+            "sensor_id": "S-2",
+            "status": "ACTIVE",
+            "health_status": "ACTIVE",
+            "clock_drift_seconds": 0,
+        },
     ]
     dataset = {"iot_telemetries": telemetries, "iot_sensors": sensors}
 
-    factory = DefectFactory(defect_rate=1.0, seed=42, enabled_defects={"DEF-01", "DEF-02", "DEF-03"})
+    factory = DefectFactory(
+        defect_rate=1.0, seed=42, enabled_defects={"DEF-01", "DEF-02", "DEF-03"}
+    )
     mutated = factory.apply(dataset)
 
     # Telemetries timestamps adjusted and delayed batch added
-    assert any(t.get("reading_timestamp") != "2026-10-15T10:00:00Z" for t in mutated["iot_telemetries"])
+    assert any(
+        t.get("reading_timestamp") != "2026-10-15T10:00:00Z" for t in mutated["iot_telemetries"]
+    )
     assert any("ingestion_batch_id" in t for t in mutated["iot_telemetries"])
 
 

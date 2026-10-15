@@ -90,9 +90,7 @@ class DefectFactory:
             self.base_rates.update(custom_rates)
 
         self.enabled_defects = (
-            set(enabled_defects)
-            if enabled_defects is not None
-            else set(self.base_rates.keys())
+            set(enabled_defects) if enabled_defects is not None else set(self.base_rates.keys())
         )
         self.report = DefectReport(global_defect_rate=self.defect_rate)
 
@@ -275,8 +273,8 @@ class DefectFactory:
                                 mutated_value=new_ts,
                                 rule=rule,
                             )
-                        except Exception:
-                            pass
+                        except (ValueError, TypeError) as err:
+                            logger.debug("Failed applying telemetry offset: %s", err)
 
     def inject_def02_stuck_sensors(
         self,
@@ -340,7 +338,11 @@ class DefectFactory:
                     if orig_tx:
                         try:
                             dt = datetime.fromisoformat(orig_tx.replace("Z", "+00:00"))
-                            new_tx = (dt - timedelta(days=delayed_days)).isoformat().replace("+00:00", "Z")
+                            new_tx = (
+                                (dt - timedelta(days=delayed_days))
+                                .isoformat()
+                                .replace("+00:00", "Z")
+                            )
                             sensor["last_transmission_at"] = new_tx
                             sensor["delayed_block_days"] = delayed_days
 
@@ -354,8 +356,8 @@ class DefectFactory:
                                 mutated_value=new_tx,
                                 rule=rule,
                             )
-                        except Exception:
-                            pass
+                        except (ValueError, TypeError) as err:
+                            logger.debug("Failed applying delayed block: %s", err)
 
         if telemetries:
             for item in telemetries:
@@ -422,7 +424,9 @@ class DefectFactory:
 
                 # Invert or rescale nitrogen or phosphorus according to unit
                 if chosen_unit == "%":
-                    analysis["nitrogen_ppm"] = round(analysis.get("nitrogen_ppm", 50.0) / 10000.0, 5)
+                    analysis["nitrogen_ppm"] = round(
+                        analysis.get("nitrogen_ppm", 50.0) / 10000.0, 5
+                    )
                 elif chosen_unit == "g/kg":
                     analysis["nitrogen_ppm"] = round(analysis.get("nitrogen_ppm", 50.0) / 1000.0, 4)
 
@@ -479,7 +483,10 @@ class DefectFactory:
                 if compositions:
                     # Check if any affected delivery is in this batch
                     is_affected = any(
-                        (c.get("batch_id") == batch.get("batch_id") or c.get("batch_code") == batch_code)
+                        (
+                            c.get("batch_id") == batch.get("batch_id")
+                            or c.get("batch_code") == batch_code
+                        )
                         and c.get("delivery_id") in affected_delivery_ids
                         for c in compositions
                     )
