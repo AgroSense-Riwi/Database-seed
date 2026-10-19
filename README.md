@@ -53,6 +53,44 @@ python -m seed --mode prod --seed 42 --defect-rate 0.05
 python -m seed --mode dev --reset
 ```
 
+## Despliegue separado de la base de datos
+
+`docker-compose.yml` levanta únicamente PostgreSQL/PostGIS y el contenedor de
+siembra. Cuando PostgreSQL está saludable, el contenedor aplica las migraciones
+Alembic de la API y luego inserta datos compatibles con sus tablas. La API no se
+inicia en este servidor.
+
+Desde la raíz del repositorio, copia `database/.env.example` como
+`database/.env` y reemplaza los valores de ejemplo. `POSTGRES_BIND_ADDRESS` debe
+ser la IP privada asignada a la interfaz de red de este servidor DB. Después ejecuta:
+
+```bash
+docker compose --env-file database/.env -f database/docker-compose.yml up -d --build
+```
+
+Espera a que finalice la carga antes de arrancar la API:
+
+```bash
+docker compose --env-file database/.env -f database/docker-compose.yml logs -f seed
+```
+
+El contenedor `seed` debe terminar con código `0`; luego puedes iniciar la API en su
+servidor configurando su URL de PostgreSQL con la IP privada de DB.
+
+En el servidor API, configura `AGROSENSE_DATABASE_URL` con el esquema
+`postgresql+asyncpg://` y `DATABASE_URL` con `postgresql+psycopg://`; ambas deben
+usar las mismas credenciales, la IP privada de DB y el nombre de la base de datos.
+
+El puerto publicado por defecto es `5432`. Permite ese puerto en el firewall solo
+desde la IP del servidor API y establece en la API la URL de PostgreSQL usando la
+IP privada del servidor DB. Puedes cambiar el puerto con `POSTGRES_PORT`. Usa una
+contraseña URL-safe en `POSTGRES_PASSWORD` para la URL de conexión.
+
+La semilla es idempotente y vuelve a ejecutarse al iniciar el servicio `seed`. Solo
+carga las entidades disponibles en el esquema actual de la API; los catálogos IoT,
+de suelos y espaciales exclusivos del generador no se insertan porque la API aún no
+tiene tablas equivalentes.
+
 ## Environment Variables
 
 | Variable | Default Value | Description |

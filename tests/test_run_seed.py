@@ -4,6 +4,8 @@ import argparse
 
 import pytest
 
+from seed.api_writer import API_TABLES, build_api_dataset
+from seed.faker_generators import AgroSenseFakerGenerator
 from seed.run_seed import (
     SeedConfig,
     build_parser,
@@ -15,6 +17,18 @@ from seed.run_seed import (
     set_reproducible_state,
     validate_defect_rate,
 )
+
+
+def test_api_dataset_projection_uses_only_api_schema_columns():
+    generated = AgroSenseFakerGenerator(seed=42).generate_all(mode="dev")
+
+    projected = build_api_dataset(generated)
+
+    assert set(projected) == set(API_TABLES)
+    for table, rows in projected.items():
+        assert all(set(row) == set(API_TABLES[table]) for row in rows)
+    assert projected["international_buyers"][0]["buyer_name"]
+    assert len(projected["farms"]) == len(generated["farms"])
 
 
 def test_default_cli_arguments():

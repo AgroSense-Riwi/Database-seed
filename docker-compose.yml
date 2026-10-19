@@ -1,0 +1,42 @@
+name: agrosense-db
+
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: agrosense_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    ports:
+      - "${POSTGRES_BIND_ADDRESS:?POSTGRES_BIND_ADDRESS is required}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_spatial_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  seed:
+    build:
+      context: ..
+      dockerfile: database/Dockerfile
+    container_name: agrosense_seed
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      SEED_PROFILE: ${SEED_PROFILE:-dev}
+      SEED_RANDOM_STATE: ${SEED_RANDOM_STATE:-42}
+      SEED_DEFECT_GLOBAL_RATE: ${SEED_DEFECT_GLOBAL_RATE:-0.05}
+      SEED_DB_BATCH_SIZE: ${SEED_DB_BATCH_SIZE:-1000}
+      SEED_RESET_BEFORE_RUN: ${SEED_RESET_BEFORE_RUN:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  pg_spatial_data:
+    name: agrosense_db_data

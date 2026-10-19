@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from faker import Faker
 
+from seed.api_writer import write_api_dataset
 from seed.defect_factory import DefectFactory, DefectReport
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.records import generate_sample_seed_records, generate_spatial_seed_records
@@ -265,6 +266,7 @@ def run_seed(
         # 2. Generación determinista de entidades sintéticas con integración de Faker
         faker_gen = AgroSenseFakerGenerator(seed=config.seed)
         dataset = faker_gen.generate_all(mode=config.mode)
+        clean_dataset = dataset
         farms_count = len(dataset.get("farms", []))
         logger.info(
             "Dataset sintético generado con Faker: %d fincas, %d productores, %d sensores.",
@@ -315,6 +317,13 @@ def run_seed(
             "Certificación CT-06 aprobada: 0 inflación de filas y 0 duplicados en %d tablas.",
             idempotency_report["tables_tested"],
         )
+
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            write_api_dataset(clean_dataset, database_url, reset=config.reset)
+            logger.info("Dataset compatible con la API escrito en PostgreSQL.")
+        else:
+            logger.info("DATABASE_URL no está configurada; se omite la escritura en PostgreSQL.")
 
         # 5. Geometrías espaciales de muestra para diagnóstico CLI
         sample_data, reserve_data = generate_spatial_seed_records(
