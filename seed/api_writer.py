@@ -141,12 +141,8 @@ def write_api_dataset(
     with psycopg.connect(connection_url) as connection:
         with connection.cursor() as cursor:
             if reset:
-                tables = sql.SQL(", ").join(
-                    sql.Identifier(table) for table in reversed(API_TABLES)
-                )
-                cursor.execute(
-                    sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(tables)
-                )
+                tables = sql.SQL(", ").join(sql.Identifier(table) for table in reversed(API_TABLES))
+                cursor.execute(sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(tables))
             for table, rows in projected.items():
                 _upsert_rows(cursor, table, rows)
             cursor.execute(

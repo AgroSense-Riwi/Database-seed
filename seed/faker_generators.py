@@ -8,6 +8,7 @@ natural business keys (Deliverable E-03, CT-06).
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import uuid
 from typing import Any
@@ -181,6 +182,15 @@ class AgroSenseFakerGenerator:
             seed: Entero fijo para el estado pseudoaleatorio.
         """
         self.seed = seed
+        random.seed(seed)
+        try:
+            import numpy as np
+
+            np.random.seed(seed)
+        except ImportError:
+            pass
+        Faker.seed(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
         self.rng = random.Random(seed)
         self.faker_es = Faker("es_CO")
         self.faker_en = Faker("en_US")
@@ -777,26 +787,405 @@ class AgroSenseFakerGenerator:
             )
         return contracts
 
-    def generate_all(self, mode: str = "dev") -> dict[str, list[dict[str, Any]]]:
-        """Genera el dataset sintético completo según el perfil de volumen.
+    def generate_sensor_anomalies_log(
+        self,
+        sensors: list[dict[str, Any]],
+        count: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Genera registros deterministas para sensor_anomalies_log (Tier 4)."""
+        anomaly_types = ["OUT_OF_RANGE", "DUPLICATE_BLOCK", "STALE_OVER_7_DAYS", "NULL_PAYLOAD"]
+        anomalies: list[dict[str, Any]] = []
+        if not sensors:
+            return anomalies
+
+        for i in range(1, count + 1):
+            sensor = sensors[(i - 1) % len(sensors)]
+            sensor_id = sensor["sensor_id"]
+            reading_ts = f"2026-10-14T{8 + (i % 12):02d}:00:00Z"
+            received_at = f"2026-10-14T{8 + (i % 12):02d}:02:30Z"
+            atype = anomaly_types[(i - 1) % len(anomaly_types)]
+            natural_key = f"{sensor_id}:{reading_ts}:{atype}"
+            anomaly_id = self.get_uuid5(natural_key)
+
+            anomalies.append(
+                {
+                    "anomaly_id": anomaly_id,
+                    "sensor_id": sensor_id,
+                    "reading_timestamp": reading_ts,
+                    "received_at": received_at,
+                    "anomaly_type": atype,
+                    "raw_payload": {
+                        "sensor_id": sensor_id,
+                        "reading_timestamp": reading_ts,
+                        "anomaly_type": atype,
+                        "reading_value": 999.9 if atype == "OUT_OF_RANGE" else None,
+                        "sensor_type": sensor.get("sensor_type", "MULTI_AGRO"),
+                    },
+                }
+            )
+        return anomalies
+
+    def generate_fertilizer_recommendations(
+        self,
+        farm_plots: list[dict[str, Any]],
+        soil_analyses: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Genera recomendaciones agronómicas de fertilización según análisis de suelos.
+
+        Cumple con la regla de negocio RN-07 (Tier 4).
+        """
+        recommendations: list[dict[str, Any]] = []
+        if not farm_plots or not soil_analyses:
+            return recommendations
+
+        statuses = ["PENDING", "APPLIED", "EXPIRED"]
+        for i, analysis in enumerate(soil_analyses):
+            plot = farm_plots[i % len(farm_plots)]
+            analysis_id = analysis["analysis_id"]
+            plot_id = plot["plot_id"]
+            natural_key = f"FERT:{analysis_id}:{plot_id}"
+            rec_id = self.get_uuid5(natural_key)
+
+            # Cálculo de dosis recomendada a partir de los niveles químicos del suelo
+            n_val = analysis.get("nitrogen_mg_kg", 50.0)
+            p_val = analysis.get("phosphorus_mg_kg", 25.0)
+            k_val = analysis.get("potassium_mg_kg", 200.0)
+            ph = analysis.get("ph_level", 5.5)
+
+            rec_n = max(0.0, round(180.0 - (n_val * 1.2), 2))
+            rec_p = max(0.0, round(60.0 - (p_val * 0.8), 2))
+            rec_k = max(0.0, round(150.0 - (k_val * 0.25), 2))
+            lime = round(max(0.0, (6.0 - ph) * 500.0), 2)
+            saving_pct = round(self.rng.uniform(10.0, 35.0), 2)
+
+            recommendations.append(
+                {
+                    "recommendation_id": rec_id,
+                    "plot_id": plot_id,
+                    "analysis_id": analysis_id,
+                    "generated_at": f"2026-10-15T09:{i % 60:02d}:00Z",
+                    "recommended_n_kg_ha": rec_n,
+                    "recommended_p_kg_ha": rec_p,
+                    "recommended_k_kg_ha": rec_k,
+                    "lime_amendment_kg_ha": lime,
+                    "estimated_saving_pct": saving_pct,
+                    "status": statuses[i % len(statuses)],
+                }
+            )
+        return recommendations
+
+    def generate_cupping_evaluations(
+        self,
+        batches: list[dict[str, Any]],
+        users: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Genera evaluaciones sensoriales de catación SCA para lotes de exportación (Tier 5)."""
+        cuppings: list[dict[str, Any]] = []
+        if not batches:
+            return cuppings
+
+        quality_users = [u for u in users if u.get("role") in {"ADMIN", "AGRONOMIST"}]
+        evaluator_id = (
+            quality_users[0]["user_id"] if quality_users else self.get_uuid5("USER-CATADOR-01")
+        )
+
+        sensory_profiles = [
+            "Notas a chocolate negro, caramelo y panela con acidez cítrica brillante.",
+            "Perfil frutal intenso a mora y ciruela, cuerpo sedoso y postgusto prolongado.",
+            "Notas florales a jazmín, miel de caña y suave acidez málica.",
+            "Sensaciones achocolatadas, nuez tostada, acidez media balanceada y cuerpo redondo.",
+        ]
+
+        for i, batch in enumerate(batches):
+            batch_id = batch["batch_id"]
+            cupping_date = f"2026-10-{12 + (i % 10):02d}"
+            natural_key = f"CUP:{batch_id}:{cupping_date}"
+            cupping_id = self.get_uuid5(natural_key)
+
+            sca_score = round(batch.get("cupping_score", 84.50), 2)
+            acidity = round(self.rng.uniform(7.75, 8.75), 2)
+            body = round(self.rng.uniform(7.50, 8.50), 2)
+            notes = sensory_profiles[i % len(sensory_profiles)]
+
+            cuppings.append(
+                {
+                    "cupping_id": cupping_id,
+                    "batch_id": batch_id,
+                    "quality_chief_id": evaluator_id,
+                    "cupping_date": cupping_date,
+                    "sca_total_score": sca_score,
+                    "acidity_score": acidity,
+                    "body_score": body,
+                    "sensory_notes": notes,
+                }
+            )
+        return cuppings
+
+    def generate_agronomic_alerts(
+        self,
+        farms: list[dict[str, Any]],
+        forced_roya: int = 15,
+        forced_deficit: int = 10,
+        forced_deficit_cancel: int = 5,
+        forced_extreme_rain: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Genera alertas agronómicas forzadas deterministas (RN-03, RN-04, RN-05, CA-03..CA-05)."""
+        alerts: list[dict[str, Any]] = []
+        if not farms:
+            return alerts
+
+        # 1. Escenario Roya (RN-03, CA-03): >= 4 días consecutivos con HR > 85% y Temp 21-25°C
+        roya_target = min(forced_roya, len(farms))
+        for i in range(roya_target):
+            farm = farms[i]
+            farm_id = farm["farm_id"]
+            gen_at = f"2026-10-18T04:30:{i % 60:02d}Z"
+            natural_key = f"ALERT:ROYA:{farm_id}:{gen_at}"
+            alerts.append(
+                {
+                    "alert_id": self.get_uuid5(natural_key),
+                    "farm_id": farm_id,
+                    "alert_type": "COFFEE_RUST",
+                    "weight_multiplier": 3,
+                    "data_source_used": "IOT_SENSOR",
+                    "forecast_days_ahead": 5,
+                    "evidence_summary": {
+                        "consecutive_days_hr_gt_85": 4,
+                        "avg_temp_c": 23.2,
+                        "daily_hours_hr_gt_85": 7.0,
+                        "risk_level": "CRITICAL_EARLY_WARNING",
+                        "rule_ref": "RN-03",
+                    },
+                    "alert_status": "ACTIVE",
+                    "generated_at": gen_at,
+                }
+            )
+
+        # 2. Escenario Déficit Hídrico (RN-04): humedad suelo < 25% por 5d y pronóstico <= 5mm
+        deficit_start = roya_target
+        deficit_target = min(forced_deficit, max(0, len(farms) - deficit_start))
+        for i in range(deficit_target):
+            farm = farms[deficit_start + i]
+            farm_id = farm["farm_id"]
+            gen_at = f"2026-10-18T04:35:{i % 60:02d}Z"
+            natural_key = f"ALERT:DEFICIT:{farm_id}:{gen_at}"
+            alerts.append(
+                {
+                    "alert_id": self.get_uuid5(natural_key),
+                    "farm_id": farm_id,
+                    "alert_type": "WATER_DEFICIT",
+                    "weight_multiplier": 2,
+                    "data_source_used": "IOT_SENSOR",
+                    "forecast_days_ahead": 5,
+                    "evidence_summary": {
+                        "soil_moisture_pct": 21.5,
+                        "consecutive_dry_days": 5,
+                        "forecast_rain_mm": 3.0,
+                        "risk_level": "SEVERE_DEFICIT",
+                        "rule_ref": "RN-04",
+                    },
+                    "alert_status": "ACTIVE",
+                    "generated_at": gen_at,
+                }
+            )
+
+        # 3. Escenario Déficit Cancelado/Suprimido (CA-04): suelo seco (< 25%) pero lluvia 8mm
+        cancel_start = deficit_start + deficit_target
+        cancel_target = min(forced_deficit_cancel, max(0, len(farms) - cancel_start))
+        for i in range(cancel_target):
+            farm = farms[cancel_start + i]
+            farm_id = farm["farm_id"]
+            gen_at = f"2026-10-18T04:40:{i % 60:02d}Z"
+            natural_key = f"ALERT:DEFICIT_CANCEL:{farm_id}:{gen_at}"
+            alerts.append(
+                {
+                    "alert_id": self.get_uuid5(natural_key),
+                    "farm_id": farm_id,
+                    "alert_type": "WATER_DEFICIT",
+                    "weight_multiplier": 2,
+                    "data_source_used": "IOT_SENSOR",
+                    "forecast_days_ahead": 5,
+                    "evidence_summary": {
+                        "soil_moisture_pct": 22.0,
+                        "consecutive_dry_days": 5,
+                        "forecast_rain_mm": 8.0,
+                        "action": "SUPPRESSED_DUE_TO_RAIN_FORECAST",
+                        "rule_ref": "CA-04",
+                    },
+                    "alert_status": "EXPIRED",
+                    "generated_at": gen_at,
+                }
+            )
+
+        # 4. Escenario Lluvia Extrema (RN-05): precipitación acumulada > 120mm en 72h
+        rain_start = cancel_start + cancel_target
+        rain_target = min(forced_extreme_rain, max(0, len(farms) - rain_start))
+        for i in range(rain_target):
+            farm = farms[rain_start + i]
+            farm_id = farm["farm_id"]
+            gen_at = f"2026-10-18T04:45:{i % 60:02d}Z"
+            natural_key = f"ALERT:EXTREME_RAIN:{farm_id}:{gen_at}"
+            alerts.append(
+                {
+                    "alert_id": self.get_uuid5(natural_key),
+                    "farm_id": farm_id,
+                    "alert_type": "EXTREME_RAIN",
+                    "weight_multiplier": 1,
+                    "data_source_used": "IOT_SENSOR",
+                    "forecast_days_ahead": 3,
+                    "evidence_summary": {
+                        "accumulated_rain_72h_mm": 135.0,
+                        "threshold_mm": 120.0,
+                        "risk_level": "LANDSLIDE_AND_SATURATION_RISK",
+                        "rule_ref": "RN-05",
+                    },
+                    "alert_status": "ACTIVE",
+                    "generated_at": gen_at,
+                }
+            )
+
+        return alerts
+
+    def generate_agronomist_field_visits(
+        self,
+        farms: list[dict[str, Any]],
+        alerts: list[dict[str, Any]],
+        users: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Genera visitas técnicas priorizadas con desempate por área cultivada (RN-06, CA-05)."""
+        visits: list[dict[str, Any]] = []
+        if not farms:
+            return visits
+
+        agronomists = [u for u in users if u.get("role") == "AGRONOMIST"]
+        default_agro_id = (
+            agronomists[0]["user_id"] if agronomists else self.get_uuid5("USER-AGRONOMIST-01")
+        )
+
+        active_alerts_by_farm: dict[str, dict[str, int]] = {}
+        for alert in alerts:
+            if alert.get("alert_status") == "ACTIVE":
+                fid = alert["farm_id"]
+                counts = active_alerts_by_farm.setdefault(
+                    fid, {"COFFEE_RUST": 0, "WATER_DEFICIT": 0, "EXTREME_RAIN": 0}
+                )
+                atype = alert.get("alert_type")
+                if atype in counts:
+                    counts[atype] += 1
+
+        scored_farms: list[dict[str, Any]] = []
+        for farm in farms:
+            fid = farm["farm_id"]
+            counts = active_alerts_by_farm.get(
+                fid, {"COFFEE_RUST": 0, "WATER_DEFICIT": 0, "EXTREME_RAIN": 0}
+            )
+            rust_count = counts["COFFEE_RUST"]
+            deficit_count = counts["WATER_DEFICIT"]
+            rain_count = counts["EXTREME_RAIN"]
+            score = (3 * rust_count) + (2 * deficit_count) + (1 * rain_count)
+            cult_area = farm.get("cultivated_area_ha", 5.0)
+
+            scored_farms.append(
+                {
+                    "farm": farm,
+                    "rust_count": rust_count,
+                    "deficit_count": deficit_count,
+                    "rain_count": rain_count,
+                    "priority_score": score,
+                    "cultivated_area_ha": cult_area,
+                }
+            )
+
+        # Ordenar por prioridad descendente, desempatando por mayor área cultivada (RN-06, CA-05)
+        scored_farms.sort(
+            key=lambda item: (item["priority_score"], item["cultivated_area_ha"]),
+            reverse=True,
+        )
+
+        calculation_date = "2026-10-18"
+        visit_statuses = ["SCHEDULED", "COMPLETED", "UNATTENDED"]
+        visit_outcomes = ["CONTROLLED", "PARTIAL_LOSS", "FALSE_POSITIVE"]
+
+        for idx, entry in enumerate(scored_farms[: len(farms)]):
+            farm = entry["farm"]
+            fid = farm["farm_id"]
+            natural_key = f"VISIT:{fid}:{calculation_date}"
+            visit_id = self.get_uuid5(natural_key)
+
+            agro_id = (
+                agronomists[idx % len(agronomists)]["user_id"] if agronomists else default_agro_id
+            )
+            vstatus = visit_statuses[idx % len(visit_statuses)]
+            outcome = visit_outcomes[idx % len(visit_outcomes)] if vstatus == "COMPLETED" else None
+            visited_at = f"{calculation_date}T10:00:00Z" if vstatus == "COMPLETED" else None
+
+            visits.append(
+                {
+                    "visit_id": visit_id,
+                    "farm_id": fid,
+                    "agronomist_id": agro_id,
+                    "calculation_date": calculation_date,
+                    "rust_alerts_count": entry["rust_count"],
+                    "deficit_alerts_count": entry["deficit_count"],
+                    "rain_alerts_count": entry["rain_count"],
+                    "priority_score": entry["priority_score"],
+                    "tie_breaker_area_ha": entry["cultivated_area_ha"],
+                    "visit_status": vstatus,
+                    "visit_outcome": outcome,
+                    "visited_at": visited_at,
+                }
+            )
+
+        return visits
+
+    def generate_all(
+        self,
+        mode: str = "dev",
+        farms_count: int | None = None,
+        pilot_count: int | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Genera el dataset sintético completo según el perfil de volumen en 5 niveles topológicos.
 
         Args:
             mode: 'dev' para desarrollo local o 'prod' para volumen completo.
+            farms_count: Número opcional explícito de fincas a generar.
+            pilot_count: Número opcional explícito de fincas con sensores piloto.
 
         Returns:
             dict[str, list[dict[str, Any]]]: Diccionario con las colecciones de entidades.
         """
         is_prod = mode == "prod"
-        farms_count = 1300 if is_prod else 50
-        pilot_count = 300 if is_prod else 15
+        env_farms = os.getenv("SEED_FARMS_TOTAL")
+        env_pilot = os.getenv("SEED_PILOT_FARMS_COUNT")
+
+        if farms_count is not None:
+            f_count = farms_count
+        elif env_farms and env_farms.isdigit():
+            f_count = int(env_farms)
+        else:
+            f_count = 1300 if is_prod else 130
+
+        if pilot_count is not None:
+            p_count = pilot_count
+        elif env_pilot and env_pilot.isdigit():
+            p_count = int(env_pilot)
+        else:
+            p_count = 300 if is_prod else 30
+
         users_count = 40 if is_prod else 15
         producers_count = 200 if is_prod else 25
         buyers_count = 40 if is_prod else 10
-        deliveries_count = 1500 if is_prod else 80
+        deliveries_count = 15000 if is_prod else 150
         analyses_count = 300 if is_prod else 40
         batches_count = 50 if is_prod else 10
 
-        # Tier 1
+        # Escenarios agronómicos forzados (RN-03, RN-04, RN-05, CA-03..CA-05)
+        forced_roya = int(os.getenv("SEED_FORCE_ROYA_FARMS", "15"))
+        forced_deficit = int(os.getenv("SEED_FORCE_DEFICIT_FARMS", "10"))
+        forced_deficit_cancel = int(os.getenv("SEED_FORCE_DEFICIT_CANCEL", "5"))
+        forced_extreme_rain = int(os.getenv("SEED_FORCE_EXTREME_RAIN_FARMS", "8"))
+
+        # Tier 1 (Catálogos e Independientes)
         departments = self.generate_departments()
         users = self.generate_users(count=users_count)
         producers = self.generate_producers(count=producers_count)
@@ -805,14 +1194,14 @@ class AgroSenseFakerGenerator:
         sensor_types = self.generate_sensor_types()
         crop_nutrient_references = self.generate_crop_nutrient_references(coffee_varieties)
 
-        # Tier 2
+        # Tier 2 (Geográficos y Espaciales)
         municipalities = self.generate_municipalities(departments)
         forest_reserves = self.generate_forest_reserves(count=5 if is_prod else 3)
 
-        # Tier 3
+        # Tier 3 (Entidades Agrícolas Core)
         farms = self.generate_farms(
-            count=farms_count,
-            pilot_count=pilot_count,
+            count=f_count,
+            pilot_count=p_count,
             producers=producers,
             municipalities=municipalities,
             forest_reserves=forest_reserves,
@@ -820,17 +1209,34 @@ class AgroSenseFakerGenerator:
         farm_plots = self.generate_farm_plots(farms, plots_per_farm=2, varieties=coffee_varieties)
         farm_reserve_overlaps = self.generate_farm_reserve_overlaps(farms, forest_reserves)
 
-        # Tier 4
+        # Tier 4 (Operaciones y Hardware)
         iot_sensors = self.generate_iot_sensors(farms, sensor_types)
+        sensor_anomalies_log = self.generate_sensor_anomalies_log(
+            iot_sensors, count=15 if is_prod else 5
+        )
         soil_lab_analyses = self.generate_soil_lab_analyses(farms, count=analyses_count)
+        fertilizer_recommendations = self.generate_fertilizer_recommendations(
+            farm_plots, soil_lab_analyses
+        )
         harvest_deliveries = self.generate_harvest_deliveries(farms, count=deliveries_count)
 
-        # Tier 5
+        # Tier 5 (Agregaciones, Trazabilidad y Alertas)
         export_batches = self.generate_export_batches(count=batches_count)
         batch_farm_compositions = self.generate_batch_farm_compositions(
             export_batches, harvest_deliveries
         )
+        cupping_evaluations = self.generate_cupping_evaluations(export_batches, users)
         buyer_batch_contracts = self.generate_buyer_batch_contracts(export_batches, buyers)
+        agronomic_alerts = self.generate_agronomic_alerts(
+            farms,
+            forced_roya=forced_roya,
+            forced_deficit=forced_deficit,
+            forced_deficit_cancel=forced_deficit_cancel,
+            forced_extreme_rain=forced_extreme_rain,
+        )
+        agronomist_field_visits = self.generate_agronomist_field_visits(
+            farms, agronomic_alerts, users
+        )
 
         return {
             "departments": departments,
@@ -846,9 +1252,14 @@ class AgroSenseFakerGenerator:
             "farm_plots": farm_plots,
             "farm_reserve_overlaps": farm_reserve_overlaps,
             "iot_sensors": iot_sensors,
+            "sensor_anomalies_log": sensor_anomalies_log,
             "soil_lab_analyses": soil_lab_analyses,
+            "fertilizer_recommendations": fertilizer_recommendations,
             "harvest_deliveries": harvest_deliveries,
             "export_batches": export_batches,
             "batch_farm_compositions": batch_farm_compositions,
+            "cupping_evaluations": cupping_evaluations,
             "buyer_batch_contracts": buyer_batch_contracts,
+            "agronomic_alerts": agronomic_alerts,
+            "agronomist_field_visits": agronomist_field_visits,
         }
