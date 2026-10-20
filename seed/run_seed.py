@@ -12,6 +12,7 @@ import os
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from faker import Faker
 
@@ -47,6 +48,14 @@ class SeedConfig:
         defect_rate: Proporción de defectos y anomalías sintéticas a inyectar (0.0 a 1.0).
         reset: Indica si se debe ejecutar un borrado seguro (TRUNCATE CASCADE) previo a la carga.
         batch_size: Tamaño de lote para sentencias multi-row UPSERT (por defecto 1000).
+        farms: Número opcional explícito de fincas a generar.
+        pilot_farms: Número opcional explícito de fincas con sensores piloto.
+        force_roya: Número de fincas con alerta de roya forzada (RN-03, CA-03).
+        force_deficit: Número de fincas con alerta de déficit hídrico forzada (RN-04).
+        force_deficit_cancel: Número de fincas con alerta cancelada por lluvia (CA-04).
+        force_extreme_rain: Número de fincas con lluvia extrema forzada (RN-05).
+        emit_bronze: Generar archivos del Data Lake Bronze (F1 a F7).
+        bronze_path: Ruta de destino para archivos Bronze.
     """
 
     mode: str
@@ -54,6 +63,14 @@ class SeedConfig:
     defect_rate: float
     reset: bool = False
     batch_size: int = 1000
+    farms: int | None = None
+    pilot_farms: int | None = None
+    force_roya: int = 15
+    force_deficit: int = 10
+    force_deficit_cancel: int = 5
+    force_extreme_rain: int = 8
+    emit_bronze: bool = False
+    bronze_path: str = "./data/bronze"
 
 
 def set_reproducible_state(seed: int) -> None:
@@ -67,6 +84,12 @@ def set_reproducible_state(seed: int) -> None:
     """
     logger.debug("Fijando estado reproducible con semilla=%d", seed)
     random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except ImportError:
+        pass
     Faker.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
 
@@ -132,12 +155,39 @@ def build_parser() -> argparse.ArgumentParser:
 
     env_reset = os.getenv("SEED_RESET_BEFORE_RUN", "false").lower() in {"true", "1", "yes"}
 
+    try:
+        default_force_roya = int(os.getenv("SEED_FORCE_ROYA_FARMS", "15"))
+    except ValueError:
+        default_force_roya = 15
+
+    try:
+        default_force_deficit = int(os.getenv("SEED_FORCE_DEFICIT_FARMS", "10"))
+    except ValueError:
+        default_force_deficit = 10
+
+    try:
+        default_force_deficit_cancel = int(os.getenv("SEED_FORCE_DEFICIT_CANCEL", "5"))
+    except ValueError:
+        default_force_deficit_cancel = 5
+
+    try:
+        default_force_extreme_rain = int(os.getenv("SEED_FORCE_EXTREME_RAIN_FARMS", "8"))
+    except ValueError:
+        default_force_extreme_rain = 8
+
+    env_emit_bronze = os.getenv("SEED_OUTPUT_BRONZE_FILES", "false").lower() in {
+        "true",
+        "1",
+        "yes",
+    }
+    default_bronze_path = os.getenv("BRONZE_LANDING_PATH", "./data/bronze")
+
     # 2. Definición del parser con descripción del entregable
     parser = argparse.ArgumentParser(
         prog="run_seed.py",
         description=(
             "AgroSense Café - Ejecutor reproducible e idempotente de datos sintéticos. "
-            "Puebla la base de datos PostgreSQL y las capas de almacenamiento."
+            "Puebla la base de datos PostgreSQL y las capas de almacenamiento (Data Lake Bronze)."
         ),
     )
 
@@ -147,8 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["dev", "prod"],
         default=default_mode,
         help=(
-            f"Perfil de volumen: 'dev' (ligero para pruebas locales) "
-            f"o 'prod' (volumen completo). Por defecto: {default_mode}."
+            f"Perfil de volumen: 'dev' (130 fincas para desarrollo local) "
+            f"o 'prod' (1,300 fincas para volumen completo). Por defecto: {default_mode}."
         ),
     )
 
@@ -191,6 +241,68 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Tamaño de lote para sentencias multi-row UPSERT. Por defecto: {default_batch_size}.",
     )
 
+    # Argumentos para volumen configurable
+    parser.add_argument(
+        "--farms",
+        type=int,
+        default=None,
+        dest="farms",
+        help="Número total de fincas a generar (sobrescribe el valor predeterminado del perfil).",
+    )
+    parser.add_argument(
+        "--pilot-farms",
+        type=int,
+        default=None,
+        dest="pilot_farms",
+        help="Número de fincas piloto con sensores IoT instalados.",
+    )
+
+    # Argumentos para escenarios agronómicos forzados
+    parser.add_argument(
+        "--force-roya",
+        type=int,
+        default=default_force_roya,
+        dest="force_roya",
+        help="Fincas con alerta de roya forzada (RN-03, CA-03). Por defecto: 15.",
+    )
+    parser.add_argument(
+        "--force-deficit",
+        type=int,
+        default=default_force_deficit,
+        dest="force_deficit",
+        help="Fincas con alerta de déficit hídrico forzada (RN-04). Por defecto: 10.",
+    )
+    parser.add_argument(
+        "--force-rain-save",
+        type=int,
+        default=default_force_deficit_cancel,
+        dest="force_deficit_cancel",
+        help="Fincas con déficit cancelado por pronóstico de lluvia (CA-04). Por defecto: 5.",
+    )
+    parser.add_argument(
+        "--force-rain",
+        type=int,
+        default=default_force_extreme_rain,
+        dest="force_extreme_rain",
+        help="Fincas con precipitación extrema forzada > 120mm/72h (RN-05). Por defecto: 8.",
+    )
+
+    # Argumentos para Data Lake Bronze
+    parser.add_argument(
+        "--emit-bronze",
+        action="store_true",
+        default=env_emit_bronze,
+        dest="emit_bronze",
+        help="Exporta las 7 fuentes secundarias (F1 a F7) a la capa Bronze del Data Lake.",
+    )
+    parser.add_argument(
+        "--bronze-path",
+        type=str,
+        default=default_bronze_path,
+        dest="bronze_path",
+        help=f"Ruta de destino para la capa Bronze. Por defecto: {default_bronze_path}.",
+    )
+
     return parser
 
 
@@ -211,7 +323,109 @@ def parse_args(args: Sequence[str] | None = None) -> SeedConfig:
         defect_rate=parsed.defect_rate,
         reset=parsed.reset,
         batch_size=parsed.batch_size,
+        farms=parsed.farms,
+        pilot_farms=parsed.pilot_farms,
+        force_roya=parsed.force_roya,
+        force_deficit=parsed.force_deficit,
+        force_deficit_cancel=parsed.force_deficit_cancel,
+        force_extreme_rain=parsed.force_extreme_rain,
+        emit_bronze=parsed.emit_bronze,
+        bronze_path=parsed.bronze_path,
     )
+
+
+def emit_bronze_layers(
+    dataset: dict[str, list[dict[str, Any]]],
+    base_path: str = "./data/bronze",
+) -> None:
+    """Exporta las 7 fuentes secundarias (F1 a F7) a la capa Bronze del Data Lake.
+
+    Simula el almacenamiento de datos brutos inmutables en formato JSON para S3 o local.
+    """
+    import json
+
+    os.makedirs(base_path, exist_ok=True)
+    logger.info("Exportando capas del Data Lake (Bronze) en: %s", base_path)
+
+    # F1: Requerimientos nutricionales Kaggle
+    f1_dir = os.path.join(base_path, "crop_nutrient_references")
+    os.makedirs(f1_dir, exist_ok=True)
+    with open(os.path.join(f1_dir, "references.json"), "w", encoding="utf-8") as f:
+        json.dump(dataset.get("crop_nutrient_references", []), f, indent=2, default=str)
+
+    # F2: NASA POWER Satelital Diario
+    f2_dir = os.path.join(base_path, "nasa_power_daily")
+    os.makedirs(f2_dir, exist_ok=True)
+    farms = dataset.get("farms", [])
+    nasa_records = [
+        {
+            "farm_id": farm.get("farm_id"),
+            "latitude": farm.get("latitude"),
+            "longitude": farm.get("longitude"),
+            "observation_date": "2026-10-18",
+            "t2m_mean_celsius": 22.4,
+            "rh2m_pct": 82.5,
+            "prectotcorr_mm": 12.0,
+            "ingested_at": "2026-10-18T05:00:00Z",
+        }
+        for farm in farms[: min(30, len(farms))]
+    ]
+    with open(os.path.join(f2_dir, "nasa_power_daily.json"), "w", encoding="utf-8") as f:
+        json.dump(nasa_records, f, indent=2, default=str)
+
+    # F3: Open-Meteo Pronóstico 7 días
+    f3_dir = os.path.join(base_path, "open_meteo_forecast")
+    os.makedirs(f3_dir, exist_ok=True)
+    forecast_records = [
+        {
+            "farm_id": farm.get("farm_id"),
+            "forecast_run_ts": "2026-10-18T00:00:00Z",
+            "target_hour_ts": "2026-10-18T12:00:00Z",
+            "temp_2m_celsius": 23.5,
+            "relative_humidity_pct": 86.0,
+            "precipitation_mm": 4.5,
+        }
+        for farm in farms[: min(30, len(farms))]
+    ]
+    with open(os.path.join(f3_dir, "forecast.json"), "w", encoding="utf-8") as f:
+        json.dump(forecast_records, f, indent=2, default=str)
+
+    # F4: IoT Telemetry Streams
+    f4_dir = os.path.join(base_path, "iot_telemetry")
+    os.makedirs(f4_dir, exist_ok=True)
+    telemetry_records = [
+        {
+            "sensor_id": sensor.get("sensor_id"),
+            "farm_id": sensor.get("farm_id"),
+            "sensor_type": sensor.get("sensor_type"),
+            "raw_value": 24.5,
+            "battery_pct": sensor.get("battery_level", 95.0),
+            "status": sensor.get("status", "ACTIVE"),
+        }
+        for sensor in dataset.get("iot_sensors", [])
+    ]
+    with open(os.path.join(f4_dir, "telemetry.json"), "w", encoding="utf-8") as f:
+        json.dump(telemetry_records, f, indent=2, default=str)
+
+    # F5: Entregas de Cosecha
+    f5_dir = os.path.join(base_path, "harvest_deliveries")
+    os.makedirs(f5_dir, exist_ok=True)
+    with open(os.path.join(f5_dir, "deliveries.json"), "w", encoding="utf-8") as f:
+        json.dump(dataset.get("harvest_deliveries", []), f, indent=2, default=str)
+
+    # F6: Reportes de Laboratorio de Suelos
+    f6_dir = os.path.join(base_path, "soil_lab_reports")
+    os.makedirs(f6_dir, exist_ok=True)
+    with open(os.path.join(f6_dir, "soil_analyses.json"), "w", encoding="utf-8") as f:
+        json.dump(dataset.get("soil_lab_analyses", []), f, indent=2, default=str)
+
+    # F7: Compradores y Contratos
+    f7_dir = os.path.join(base_path, "international_buyers")
+    os.makedirs(f7_dir, exist_ok=True)
+    with open(os.path.join(f7_dir, "contracts.json"), "w", encoding="utf-8") as f:
+        json.dump(dataset.get("buyer_batch_contracts", []), f, indent=2, default=str)
+
+    logger.info("Capas Bronze (F1 a F7) exportadas exitosamente en: %s", base_path)
 
 
 def run_seed(
@@ -222,11 +436,16 @@ def run_seed(
     defect_rate: float = 0.05,
     reset: bool = False,
     batch_size: int = 1000,
+    farms: int | None = None,
+    pilot_farms: int | None = None,
+    emit_bronze: bool = False,
+    bronze_path: str = "./data/bronze",
+    **kwargs: Any,
 ) -> int:
     """Orquesta y ejecuta el proceso de generación y siembra de datos con Faker y UPSERT.
 
     Admite tanto un objeto inmutable SeedConfig como parámetros por palabra clave
-    (seed_value, mode, defect_rate, reset, batch_size) para máxima compatibilidad con tests.
+    para máxima compatibilidad con tests.
 
     Args:
         config: Parámetros validados para la ejecución del seed (opcional).
@@ -235,6 +454,10 @@ def run_seed(
         defect_rate: Proporción de defectos si no se provee config.
         reset: Limpieza previa si no se provee config.
         batch_size: Tamaño de lote si no se provee config.
+        farms: Número explícito de fincas.
+        pilot_farms: Número explícito de fincas con sensores piloto.
+        emit_bronze: Generar archivos Bronze Data Lake.
+        bronze_path: Ruta de destino Bronze.
 
     Returns:
         int: Código de salida (0 para éxito, distinto de 0 en caso de error).
@@ -247,6 +470,10 @@ def run_seed(
             defect_rate=defect_rate,
             reset=reset,
             batch_size=batch_size,
+            farms=farms,
+            pilot_farms=pilot_farms,
+            emit_bronze=emit_bronze,
+            bronze_path=bronze_path,
         )
 
     try:
@@ -265,7 +492,11 @@ def run_seed(
 
         # 2. Generación determinista de entidades sintéticas con integración de Faker
         faker_gen = AgroSenseFakerGenerator(seed=config.seed)
-        dataset = faker_gen.generate_all(mode=config.mode)
+        dataset = faker_gen.generate_all(
+            mode=config.mode,
+            farms_count=config.farms,
+            pilot_count=config.pilot_farms,
+        )
         clean_dataset = dataset
         farms_count = len(dataset.get("farms", []))
         logger.info(
@@ -336,6 +567,10 @@ def run_seed(
             4326,
         )
 
+        # 6. Exportar capas Bronze si está solicitado
+        if config.emit_bronze:
+            emit_bronze_layers(dataset, base_path=config.bronze_path)
+
         logger.info("Proceso de seeding finalizado con éxito.")
         return 0
     except Exception as err:
@@ -368,6 +603,7 @@ __all__ = [
     "SeedConfig",
     "build_parser",
     "calculate_database_checksum",
+    "emit_bronze_layers",
     "get_database_row_counts",
     "get_database_state",
     "main",

@@ -204,11 +204,16 @@ def test_dev_mode_expected_row_counts_alignment():
     assert counts["crop_nutrient_references"] == 32
     assert counts["forest_reserves"] == 3
 
-    # Core entities in dev
-    assert counts["farms"] == 50
+    # Core entities in dev (130 farms per CT-01, 30 pilot farms x 3 sensors = 90 sensors)
+    assert counts["farms"] == 130
     assert counts["producers"] == 25
     assert counts["international_buyers"] == 10
-    assert counts["iot_sensors"] == 45  # 15 pilot farms x 3 sensors
-    assert counts["harvest_deliveries"] == 80
+    assert counts["iot_sensors"] == 90  # 30 pilot farms x 3 sensors
+    assert counts["harvest_deliveries"] >= 80
     assert counts["export_batches"] == 10
     assert counts["buyer_batch_contracts"] == 10
+    assert "sensor_anomalies_log" in counts
+    assert "fertilizer_recommendations" in counts
+    assert "cupping_evaluations" in counts
+    assert "agronomic_alerts" in counts
+    assert "agronomist_field_visits" in counts

@@ -187,6 +187,7 @@ class DefectFactory:
         self.inject_def02_stuck_sensors(
             sensors=data.get("iot_sensors", []),
             telemetries=data.get("iot_telemetries", []),
+            anomalies_log=data.get("sensor_anomalies_log"),
         )
 
         # 4. DEF-03: Delayed IoT Blocks (iot_telemetries / iot_sensors)
@@ -280,10 +281,12 @@ class DefectFactory:
         self,
         sensors: list[dict[str, Any]],
         telemetries: list[dict[str, Any]] | None = None,
+        anomalies_log: list[dict[str, Any]] | None = None,
     ) -> None:
         """Inject DEF-02: Stuck Sensor Anomaly (<0.5% variance over 24h).
 
         Flags sensor as DEFECTIVE_STUCK and suppresses alerts (RN-02, CA-02).
+        Also registers an entry in sensor_anomalies_log.
         """
         code = "DEF-02"
         name = "Stuck Sensor Anomaly"
@@ -294,12 +297,31 @@ class DefectFactory:
                 orig_status = sensor.get("status")
                 sensor["status"] = "DEFECTIVE_STUCK"
                 sensor["health_status"] = "DEFECTIVE_STUCK"
+                sensor_id = str(sensor.get("sensor_id", sensor.get("serial_number", "unknown")))
+
+                if anomalies_log is not None:
+                    anomaly_id = f"ANOMALY-DEF02-{sensor_id}"
+                    anomalies_log.append(
+                        {
+                            "anomaly_id": anomaly_id,
+                            "sensor_id": sensor_id,
+                            "reading_timestamp": "2026-10-14T08:00:00Z",
+                            "received_at": "2026-10-14T08:05:00Z",
+                            "anomaly_type": "OUT_OF_RANGE",
+                            "raw_payload": {
+                                "sensor_id": sensor_id,
+                                "defect_code": "DEF-02",
+                                "variation_pct": 0.12,
+                                "status": "DEFECTIVE_STUCK",
+                            },
+                        }
+                    )
 
                 self._record_injection(
                     code=code,
                     name=name,
                     table="iot_sensors",
-                    entity_id=sensor.get("sensor_id", sensor.get("serial_number", "unknown")),
+                    entity_id=sensor_id,
                     field_modified="status",
                     original_value=orig_status,
                     mutated_value="DEFECTIVE_STUCK",

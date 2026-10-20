@@ -169,7 +169,7 @@ def test_generate_faker_seed_dataset_helper():
     """Verify records.py generate_faker_seed_dataset convenience function."""
     dataset = generate_faker_seed_dataset(seed=42, mode="dev")
     assert "farms" in dataset
-    assert len(dataset["farms"]) == 50
+    assert len(dataset["farms"]) == 130
     assert len(dataset["departments"]) == 10
 
 
