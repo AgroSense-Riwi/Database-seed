@@ -54,6 +54,21 @@ API_TABLES: dict[str, tuple[str, ...]] = {
         "share_percentage",
     ),
     "buyer_batch_contracts": ("contract_id", "batch_id", "buyer_id"),
+    "cupping_evaluations": (
+        "cupping_id",
+        "batch_id",
+        "quality_chief_id",
+        "sca_total_score",
+        "acidity_score",
+        "body_score",
+        "sensory_notes",
+    ),
+    "farm_reserve_overlaps": (
+        "overlap_id",
+        "farm_id",
+        "reserve_name",
+        "overlap_geometry",
+    ),
 }
 
 _PRIMARY_KEYS = {
@@ -68,6 +83,8 @@ _PRIMARY_KEYS = {
     "export_batches": "batch_id",
     "batch_farm_compositions": "composition_id",
     "buyer_batch_contracts": "contract_id",
+    "cupping_evaluations": "cupping_id",
+    "farm_reserve_overlaps": "overlap_id",
 }
 
 
@@ -93,6 +110,8 @@ def build_api_dataset(
         "export_batches": ("export_batches", lambda row: dict(row)),
         "batch_farm_compositions": ("batch_farm_compositions", lambda row: dict(row)),
         "buyer_batch_contracts": ("buyer_batch_contracts", lambda row: dict(row)),
+        "cupping_evaluations": ("cupping_evaluations", lambda row: dict(row)),
+        "farm_reserve_overlaps": ("farm_reserve_overlaps", lambda row: dict(row)),
     }
     projected: dict[str, list[dict[str, Any]]] = {}
     for source, (target, transform) in mappings.items():

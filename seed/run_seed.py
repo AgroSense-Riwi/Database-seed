@@ -132,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     """
     # 1. Obtener valores por defecto desde variables de entorno (con fallbacks seguros)
     env_mode = os.getenv("SEED_PROFILE", "dev").lower()
+    if env_mode == "full":
+        env_mode = "prod"
     default_mode = env_mode if env_mode in {"dev", "prod"} else "dev"
 
     try:
@@ -194,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Argumento: --mode
     parser.add_argument(
         "--mode",
-        choices=["dev", "prod"],
+        choices=["dev", "prod", "full"],
         default=default_mode,
         help=(
             f"Perfil de volumen: 'dev' (130 fincas para desarrollo local) "
@@ -317,8 +319,9 @@ def parse_args(args: Sequence[str] | None = None) -> SeedConfig:
     """
     parser = build_parser()
     parsed = parser.parse_args(args)
+    normalized_mode = "prod" if parsed.mode == "full" else parsed.mode
     return SeedConfig(
-        mode=parsed.mode,
+        mode=normalized_mode,
         seed=parsed.seed,
         defect_rate=parsed.defect_rate,
         reset=parsed.reset,

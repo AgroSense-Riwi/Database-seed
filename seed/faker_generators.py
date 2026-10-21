@@ -554,6 +554,14 @@ class AgroSenseFakerGenerator:
                         "overlap_id": self.get_uuid5(natural_key),
                         "farm_id": farm["farm_id"],
                         "reserve_id": reserve["reserve_id"],
+                        "reserve_name": reserve.get("name", "Reserva Forestal Protectora Nacional"),
+                        "overlap_geometry": farm.get(
+                            "geom_ewkt",
+                            (
+                                "SRID=4326;POLYGON((-75.7 5.5, -75.69 5.5, "
+                                "-75.69 5.51, -75.7 5.51, -75.7 5.5))"
+                            ),
+                        ),
                         "overlap_area_ha": round(self.rng.uniform(0.5, 3.5), 2),
                         "deforestation_free_status": "NON_COMPLIANT",
                         "verified_at": "2026-10-13T05:00:00Z",
