@@ -30,3 +30,6 @@ select = ["E", "F", "I", "B", "UP", "S"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--cov=seed --cov-report=term-missing"
+markers = [
+    "integration: needs a real PostGIS test DB via TEST_DATABASE_URL (skipped otherwise)",
+]
