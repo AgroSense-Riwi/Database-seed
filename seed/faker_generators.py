@@ -15,6 +15,7 @@ from typing import Any
 
 from faker import Faker
 
+from seed.reproducibility import set_reproducible_state
 from seed.spatial import PostGISSpatialGenerator
 from seed.spatial_models import AGROSENSE_NAMESPACE
 
@@ -182,15 +183,7 @@ class AgroSenseFakerGenerator:
             seed: Entero fijo para el estado pseudoaleatorio.
         """
         self.seed = seed
-        random.seed(seed)
-        try:
-            import numpy as np
-
-            np.random.seed(seed)
-        except ImportError:
-            pass
-        Faker.seed(seed)
-        os.environ["PYTHONHASHSEED"] = str(seed)
+        set_reproducible_state(seed)
         self.rng = random.Random(seed)
         self.faker_es = Faker("es_CO")
         self.faker_en = Faker("en_US")

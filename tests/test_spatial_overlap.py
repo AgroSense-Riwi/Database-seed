@@ -208,20 +208,27 @@ def test_upsert_engine_supports_farm_reserve_overlaps_table():
     assert config.table_name == "farm_reserve_overlaps"
     assert config.conflict_target == ("overlap_id",)
 
-    engine = UpsertEngine()
-
-    # Simulate generating SQL statement for an overlap record
     overlap_record = {
         "overlap_id": "78328b93-8fa9-556b-a25e-57df1e25e1aa",
         "farm_id": "a910901e-7b75-5807-b649-6561fc37ca5e",
         "reserve_id": "c3313a1e-8e89-53e7-a12e-998811223344",
         "overlap_area_ha": 1.75,
-        "deforestation_free_status": "NON_COMPLIANT",
-        "verified_at": "2026-10-13T05:00:00Z",
+    }
+    store: dict = {}
+    assert UpsertEngine.simulate_upsert("farm_reserve_overlaps", store, [overlap_record]) == {
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0,
+    }
+    assert UpsertEngine.simulate_upsert("farm_reserve_overlaps", store, [overlap_record]) == {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 1,
     }
 
-    statements = engine.build_upsert_sql("farm_reserve_overlaps", [overlap_record])
-    assert len(statements) == 1
-    sql = statements[0]
-    assert "INSERT INTO farm_reserve_overlaps" in sql
-    assert "ON CONFLICT (overlap_id) DO NOTHING" in sql
+    # The real statement executed by PostgreSQL (seed.api_writer).
+    from seed.api_writer import build_upsert_statement
+
+    sql = build_upsert_statement("farm_reserve_overlaps").as_string(None)
+    assert 'INSERT INTO "farm_reserve_overlaps"' in sql
+    assert 'ON CONFLICT ("overlap_id")' in sql
