@@ -20,10 +20,13 @@ services:
       retries: 5
       start_period: 20s
 
+  # One-shot job, opt-in via `--profile seed`. Requires the API schema to exist:
+  # run the API repository's `alembic upgrade head` against `db` first.
   seed:
+    profiles: ["seed"]
     build:
-      context: ..
-      dockerfile: database/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: agrosense_seed
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
@@ -32,6 +35,8 @@ services:
       SEED_DEFECT_GLOBAL_RATE: ${SEED_DEFECT_GLOBAL_RATE:-0.05}
       SEED_DB_BATCH_SIZE: ${SEED_DB_BATCH_SIZE:-1000}
       SEED_RESET_BEFORE_RUN: ${SEED_RESET_BEFORE_RUN:-false}
+      # Reset only runs on *_test_db or when this equals POSTGRES_DB exactly.
+      SEED_RESET_CONFIRM_DB: ${SEED_RESET_CONFIRM_DB:-}
     depends_on:
       db:
         condition: service_healthy
