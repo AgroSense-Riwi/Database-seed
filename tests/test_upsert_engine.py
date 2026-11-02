@@ -44,81 +44,6 @@ def test_topological_table_order_preserves_fk_tiers():
     assert tiers[-1] == 5
 
 
-def test_format_sql_values():
-    """Verify SQL literal escaping and types formatting."""
-    assert UpsertEngine.format_sql_value(None) == "NULL"
-    assert UpsertEngine.format_sql_value(True) == "TRUE"
-    assert UpsertEngine.format_sql_value(False) == "FALSE"
-    assert UpsertEngine.format_sql_value(42) == "42"
-    assert UpsertEngine.format_sql_value(3.1416) == "3.1416"
-    assert UpsertEngine.format_sql_value("Café D'Oeste") == "'Café D''Oeste'"
-
-    # EWKT PostGIS
-    ewkt = "SRID=4326;POLYGON((-75.5 5.0, -75.4 5.0, -75.4 5.1, -75.5 5.0))"
-    formatted_geom = UpsertEngine.format_sql_value(ewkt, col_name="geom_ewkt")
-    assert formatted_geom == f"ST_GeomFromEWKT('{ewkt}')"
-
-    # JSONB
-    json_obj = {"type": "Polygon", "coordinates": []}
-    formatted_json = UpsertEngine.format_sql_value(json_obj, col_name="polygon_geojson")
-    assert formatted_json.endswith("::jsonb")
-
-
-def test_build_upsert_sql_do_update():
-    """Verify SQL syntax for ON CONFLICT DO UPDATE SET."""
-    engine = UpsertEngine(batch_size=100)
-    records = [
-        {
-            "farm_id": "7060dc2f-48eb-5db4-9a7d-47ac1b4b4ae9",
-            "farm_code": "FIN-0001",
-            "name": "Finca La Esperanza",
-            "latitude": 4.56,
-            "longitude": -75.67,
-            "total_area_ha": 15.5,
-            "altitude_msl": 1500,
-            "has_pilot_sensors": True,
-        }
-    ]
-
-    statements = engine.build_upsert_sql("farms", records)
-    assert len(statements) == 1
-    sql = statements[0]
-    assert "INSERT INTO farms" in sql
-    assert "ON CONFLICT (farm_code) DO UPDATE SET" in sql
-    assert "name = EXCLUDED.name" in sql
-    assert "latitude = EXCLUDED.latitude" in sql
-
-
-def test_build_upsert_sql_do_nothing():
-    """Verify SQL syntax for ON CONFLICT DO NOTHING."""
-    engine = UpsertEngine(batch_size=100)
-    records = [
-        {"department_id": 1, "dane_code": "05", "name": "Antioquia"},
-        {"department_id": 2, "dane_code": "17", "name": "Caldas"},
-    ]
-
-    statements = engine.build_upsert_sql("departments", records)
-    assert len(statements) == 1
-    sql = statements[0]
-    assert "INSERT INTO departments" in sql
-    assert "ON CONFLICT (dane_code) DO NOTHING" in sql
-
-
-def test_build_upsert_sql_batching():
-    """Verify multi-row SQL chunking according to batch_size."""
-    engine = UpsertEngine(batch_size=10)
-    records = [{"department_id": i, "dane_code": f"{i:02d}", "name": f"Dep {i}"} for i in range(25)]
-
-    statements = engine.build_upsert_sql("departments", records, batch_size=10)
-    assert len(statements) == 3  # 10, 10, 5
-
-
-def test_build_truncate_sql():
-    """Verify atomic TRUNCATE statements generation."""
-    sql = UpsertEngine.build_truncate_sql(["farms", "departments"])
-    assert sql == "TRUNCATE TABLE farms, departments RESTART IDENTITY CASCADE;"
-
-
 def test_simulate_upsert_updates_in_place_without_inflation():
     """Verify in-memory UPSERT updates in-place without adding duplicate rows."""
     store: dict[tuple, dict] = {}
@@ -191,33 +116,16 @@ def test_engine_invalid_batch_size():
 
 
 def test_upsert_engine_edge_cases():
-    """Verify edge cases for build_upsert_sql, simulate_upsert, and formatting."""
+    """Verify edge cases for simulate_upsert and the absence of SQL builders."""
     engine = UpsertEngine(batch_size=100)
-
-    # Empty records
-    assert engine.build_upsert_sql("farms", []) == []
-
-    # Unknown table in build_upsert_sql
-    with pytest.raises(ValueError, match="Tabla no registrada"):
-        engine.build_upsert_sql("non_existent_table", [{"id": 1}])
 
     # Unknown table in simulate_upsert
     with pytest.raises(ValueError, match="Tabla no registrada"):
         engine.simulate_upsert("non_existent_table", {}, [{"id": 1}])
 
-    # Table with DO_UPDATE where update columns are not in provided record fields
-    # Should safely fallback to DO NOTHING
-    records = [{"farm_id": "f-1", "farm_code": "FIN-0001"}]
-    statements = engine.build_upsert_sql("farms", records)
-    assert len(statements) == 1
-    assert "ON CONFLICT (farm_code) DO NOTHING" in statements[0]
-
-    # Format custom object fallback
-    class CustomObj:
-        def __str__(self):
-            return "custom_val"
-
-    assert UpsertEngine.format_sql_value(CustomObj()) == "'custom_val'"
+    # The in-memory simulator must not pretend to build/execute SQL.
+    assert not hasattr(engine, "build_upsert_sql")
+    assert not hasattr(engine, "build_all_upsert_statements")
 
 
 def test_verify_idempotency_detects_inflation(monkeypatch):

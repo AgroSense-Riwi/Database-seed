@@ -1,8 +1,13 @@
-"""AgroSense Café — UPSERT Idempotency Engine for PostgreSQL.
+"""AgroSense Café — IN-MEMORY UPSERT simulation (unit-level only).
 
-Builds and verifies native PostgreSQL INSERT ... ON CONFLICT SQL statements
-according to the topological 5-tier ingestion order and natural business keys,
-guaranteeing strict idempotency without row inflation (Deliverable E-03, CT-06).
+IMPORTANT: nothing in this module talks to PostgreSQL. It models the documented
+ON CONFLICT policy (seed_data_reproducibility_strategy.md §3) over Python dicts so
+that generator determinism and business-key uniqueness can be unit-tested
+quickly. It does NOT certify CT-06 against a database.
+
+The real writer is ``seed.api_writer`` (``INSERT ... ON CONFLICT`` executed by
+PostgreSQL) and the real CT-06 check is ``tests/test_integration_postgres.py``,
+which seeds twice and compares per-table counts and SQL-computed MD5 checksums.
 """
 
 from __future__ import annotations
@@ -335,10 +340,10 @@ TOPOLOGICAL_TABLE_ORDER: list[str] = sorted(
 
 
 class UpsertEngine:
-    """Motor de generación y verificación de sentencias UPSERT (ON CONFLICT).
+    """Simulador en memoria (nivel unitario) de la política UPSERT (ON CONFLICT).
 
-    Implementa el estándar de idempotencia estricta de PostgreSQL sin inflación de filas
-    cumpliendo con el criterio de aceptación CT-06.
+    No genera ni ejecuta SQL. La escritura real y su idempotencia en PostgreSQL
+    viven en ``seed.api_writer`` y en la prueba de integración CT-06.
     """
 
     def __init__(self, batch_size: int = 1000) -> None:
@@ -350,129 +355,6 @@ class UpsertEngine:
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
             raise ValueError("batch_size debe ser un entero positivo.")
         self.batch_size = batch_size
-
-    @staticmethod
-    def format_sql_value(val: Any, col_name: str = "") -> str:
-        """Convierte y escapa de forma segura un valor de Python a literal SQL PostgreSQL.
-
-        Args:
-            val: Valor a formatear.
-            col_name: Nombre opcional de la columna para aplicar casts específicos.
-
-        Returns:
-            str: Literal SQL formateado.
-        """
-        if val is None:
-            return "NULL"
-        if isinstance(val, bool):
-            return "TRUE" if val else "FALSE"
-        if isinstance(val, int | float):
-            return str(val)
-        if isinstance(val, dict | list):
-            serialized = json.dumps(val, ensure_ascii=False).replace("'", "''")
-            return f"'{serialized}'::jsonb"
-        if isinstance(val, str):
-            # Formateo de geometrías PostGIS EWKT
-            if (col_name in {"geom_ewkt", "geom"} or col_name.endswith("_ewkt")) and val.startswith(
-                "SRID="
-            ):
-                escaped = val.replace("'", "''")
-                return f"ST_GeomFromEWKT('{escaped}')"
-            escaped = val.replace("'", "''")
-            return f"'{escaped}'"
-        escaped = str(val).replace("'", "''")
-        return f"'{escaped}'"
-
-    def build_upsert_sql(
-        self,
-        table_name: str,
-        records: list[dict[str, Any]],
-        batch_size: int | None = None,
-    ) -> list[str]:
-        """Construye las sentencias SQL INSERT ... ON CONFLICT por lotes.
-
-        Args:
-            table_name: Nombre de la tabla destino en TABLE_UPSERT_REGISTRY.
-            records: Lista de diccionarios con los registros a insertar/actualizar.
-            batch_size: Tamaño de lote opcional (por defecto usa self.batch_size).
-
-        Returns:
-            list[str]: Lista de sentencias SQL formateadas y listas para ejecutar.
-        """
-        if not records:
-            return []
-
-        config = TABLE_UPSERT_REGISTRY.get(table_name)
-        if not config:
-            raise ValueError(f"Tabla no registrada en TABLE_UPSERT_REGISTRY: {table_name}")
-
-        chunk_size = batch_size or self.batch_size
-        columns = list(records[0].keys())
-        col_names_str = ", ".join(columns)
-        target_str = ", ".join(config.conflict_target)
-
-        # Cláusula de conflicto
-        if config.strategy == ConflictStrategy.DO_NOTHING or not config.update_columns:
-            conflict_clause = f"ON CONFLICT ({target_str}) DO NOTHING"
-        else:
-            updates = [f"{col} = EXCLUDED.{col}" for col in config.update_columns if col in columns]
-            if not updates:
-                conflict_clause = f"ON CONFLICT ({target_str}) DO NOTHING"
-            else:
-                update_set_str = ", ".join(updates)
-                conflict_clause = f"ON CONFLICT ({target_str}) DO UPDATE SET {update_set_str}"
-
-        statements: list[str] = []
-        for i in range(0, len(records), chunk_size):
-            chunk = records[i : i + chunk_size]
-            row_values: list[str] = []
-            for row in chunk:
-                formatted_vals = [
-                    self.format_sql_value(row.get(col), col_name=col) for col in columns
-                ]
-                row_values.append(f"    ({', '.join(formatted_vals)})")
-
-            values_block = ",\n".join(row_values)
-            sql = (
-                f"INSERT INTO {config.table_name} ({col_names_str})\n"
-                f"VALUES\n{values_block}\n"
-                f"{conflict_clause};"
-            )
-            statements.append(sql)
-
-        return statements
-
-    def build_all_upsert_statements(
-        self, dataset: dict[str, list[dict[str, Any]]]
-    ) -> dict[str, list[str]]:
-        """Construye todas las sentencias SQL respetando el orden topológico de 5 niveles.
-
-        Args:
-            dataset: Diccionario {table_name: list_of_records}.
-
-        Returns:
-            dict[str, list[str]]: Sentencias SQL generadas agrupadas por tabla en orden topológico.
-        """
-        all_statements: dict[str, list[str]] = {}
-        for table in TOPOLOGICAL_TABLE_ORDER:
-            records = dataset.get(table, [])
-            if records:
-                all_statements[table] = self.build_upsert_sql(table, records)
-        return all_statements
-
-    @staticmethod
-    def build_truncate_sql(table_names: list[str] | None = None) -> str:
-        """Genera sentencia TRUNCATE TABLE ... RESTART IDENTITY CASCADE para reset seguro.
-
-        Args:
-            table_names: Lista opcional de tablas (por defecto usa todas las registradas).
-
-        Returns:
-            str: Sentencia SQL de truncamiento atómico.
-        """
-        tables = table_names or list(reversed(TOPOLOGICAL_TABLE_ORDER))
-        tables_str = ", ".join(tables)
-        return f"TRUNCATE TABLE {tables_str} RESTART IDENTITY CASCADE;"
 
     @staticmethod
     def simulate_upsert(

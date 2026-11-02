@@ -8,6 +8,7 @@ natural business keys (Deliverable E-03, CT-06).
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import random
 import uuid
@@ -15,8 +16,45 @@ from typing import Any
 
 from faker import Faker
 
+from seed.reproducibility import set_reproducible_state
 from seed.spatial import PostGISSpatialGenerator
-from seed.spatial_models import AGROSENSE_NAMESPACE
+from seed.spatial_geometry import (
+    polygon_intersection,
+    polygon_to_geojson,
+    polygon_to_wkt,
+    polygons_intersect,
+    ring_area_ha,
+)
+from seed.spatial_models import AGROSENSE_NAMESPACE, COFFEE_REGION_BOUNDS, SpatialPolygonResult
+
+# DEF-07 (seed_data_defects_catalog_matrix-v2.md): forest-reserve overlap affects
+# 5 % of the pilot farms.
+RESERVE_OVERLAP_PILOT_RATE = 0.05
+
+
+def select_reserve_overlap_farms(
+    farms_count: int, pilot_count: int, rate: float = RESERVE_OVERLAP_PILOT_RATE
+) -> list[int]:
+    """Deterministically pick the 1-based farm numbers that overlap a reserve.
+
+    ``round_half_up(rate * pilots)`` farms (at least one when there are pilots),
+    evenly spread across the pilot farms (farm numbers 1..pilot_count). Independent
+    of the PRNG, so the selection is stable across seeds.
+    """
+    pilots = max(0, min(pilot_count, farms_count))
+    if pilots == 0 or rate <= 0:
+        return []
+    n = min(pilots, max(1, math.floor(rate * pilots + 0.5)))
+    return [1 + math.floor((k + 0.5) * pilots / n) for k in range(n)]
+
+
+def _ring_from_geojson(geojson: dict[str, Any] | None) -> list[tuple[float, float]]:
+    """Extract the exterior ring of a GeoJSON Polygon as (lon, lat) tuples."""
+    if not geojson or geojson.get("type") != "Polygon":
+        return []
+    coordinates = geojson.get("coordinates") or [[]]
+    return [(float(lon), float(lat)) for lon, lat in coordinates[0]]
+
 
 DEFAULT_DEPARTMENTS: list[dict[str, str]] = [
     {"dane_code": "05", "name": "Antioquia"},
@@ -182,15 +220,7 @@ class AgroSenseFakerGenerator:
             seed: Entero fijo para el estado pseudoaleatorio.
         """
         self.seed = seed
-        random.seed(seed)
-        try:
-            import numpy as np
-
-            np.random.seed(seed)
-        except ImportError:
-            pass
-        Faker.seed(seed)
-        os.environ["PYTHONHASHSEED"] = str(seed)
+        set_reproducible_state(seed)
         self.rng = random.Random(seed)
         self.faker_es = Faker("es_CO")
         self.faker_en = Faker("en_US")
@@ -430,11 +460,13 @@ class AgroSenseFakerGenerator:
         prods = producers or self.generate_producers(count=max(count // 2, 5))
         munis = municipalities or self.generate_municipalities()
         reserves = forest_reserves or self.generate_forest_reserves(count=3)
-
-        raw_reserves = [
-            self.spatial_gen.generate_forest_reserves(count=1)[0] if not reserves else None
-        ]  # dummy fallback
-        _ = raw_reserves  # reserve for overlap checking
+        reserve_rings = [_ring_from_geojson(r.get("polygon_geojson")) for r in reserves]
+        reserve_rings = [ring for ring in reserve_rings if ring]
+        overlap_slots = select_reserve_overlap_farms(count, pilot_count) if reserve_rings else []
+        # farm number -> index of the reserve it must straddle (round-robin).
+        overlap_targets = {
+            farm_number: slot % len(reserve_rings) for slot, farm_number in enumerate(overlap_slots)
+        }
 
         farms: list[dict[str, Any]] = []
 
@@ -454,20 +486,20 @@ class AgroSenseFakerGenerator:
             has_pilot_sensors = i <= pilot_count
             water_usage = round(self.rng.uniform(3.0, 5.0), 2)
 
-            # Generación espacial de polígono
-            polygon = self.spatial_gen.generate_farm_polygon(
-                farm_code=farm_code,
-                name=farm_name,
-                area_ha=total_area_ha,
+            # Generación espacial de polígono. DEF-07 (5 % de las fincas piloto) se
+            # construye geométricamente: la finca se sitúa sobre el borde de una
+            # reserva; el resto se regenera si toca accidentalmente alguna reserva.
+            if i in overlap_targets:
+                polygon = self._generate_straddling_farm_polygon(
+                    farm_code, farm_name, total_area_ha, reserve_rings[overlap_targets[i]]
+                )
+            else:
+                polygon = self._generate_reserve_free_farm_polygon(
+                    farm_code, farm_name, total_area_ha, reserve_rings
+                )
+            overlaps_reserve = any(
+                polygons_intersect(polygon.points, ring) for ring in reserve_rings
             )
-
-            # Evaluar solapamiento con reservas
-            overlaps_reserve = False
-            for res in reserves:
-                res_ewkt = res.get("geom_ewkt", "")
-                if "POLYGON" in res_ewkt and hasattr(self.spatial_gen, "polygons_intersect"):
-                    # Comprobación segura
-                    overlaps_reserve = i % 10 == 0  # inyección determinista 10%
 
             farms.append(
                 {
@@ -535,19 +567,97 @@ class AgroSenseFakerGenerator:
                 )
         return plots
 
+    def _make_farm_polygon(
+        self, farm_code: str, name: str, points: list[tuple[float, float]], area_ha: float
+    ) -> SpatialPolygonResult:
+        lons = [lon for lon, _ in points[:-1]]
+        lats = [lat for _, lat in points[:-1]]
+        return SpatialPolygonResult(
+            entity_id=self.get_uuid5(farm_code),
+            entity_code=farm_code,
+            name=name,
+            center_lat=round(sum(lats) / len(lats), 6),
+            center_lon=round(sum(lons) / len(lons), 6),
+            area_ha=area_ha,
+            points=points,
+            wkt=polygon_to_wkt(points),
+            geojson=polygon_to_geojson(points),
+            is_valid_coords=True,
+        )
+
+    def _generate_straddling_farm_polygon(
+        self,
+        farm_code: str,
+        name: str,
+        area_ha: float,
+        reserve_ring: list[tuple[float, float]],
+        max_attempts: int = 200,
+    ) -> SpatialPolygonResult:
+        """Place a farm centred on a point of the reserve boundary (partial overlap)."""
+        gen = self.spatial_gen
+        edges = list(zip(reserve_ring, reserve_ring[1:], strict=False))
+        for _ in range(max_attempts):
+            (x1, y1), (x2, y2) = edges[gen.rng.randrange(len(edges))]
+            t = gen.rng.random()
+            center_lon, center_lat = round(x1 + t * (x2 - x1), 6), round(y1 + t * (y2 - y1), 6)
+            try:
+                points = gen.generate_irregular_polygon(center_lat, center_lon, area_ha, sides=6)
+            except ValueError:
+                continue
+            if not all(gen.is_within_bounds(lat, lon, COFFEE_REGION_BOUNDS) for lon, lat in points):
+                continue
+            intersection = polygon_intersection(points, reserve_ring)
+            if intersection is None or ring_area_ha(intersection) < 0.01:
+                continue
+            return self._make_farm_polygon(farm_code, name, points, area_ha)
+        raise ValueError(f"No fue posible generar la finca {farm_code} solapando la reserva.")
+
+    def _generate_reserve_free_farm_polygon(
+        self,
+        farm_code: str,
+        name: str,
+        area_ha: float,
+        reserve_rings: list[list[tuple[float, float]]],
+        max_attempts: int = 50,
+    ) -> SpatialPolygonResult:
+        """Generate a nominal farm polygon that does not touch any reserve."""
+        for _ in range(max_attempts):
+            polygon = self.spatial_gen.generate_farm_polygon(
+                farm_code=farm_code, name=name, area_ha=area_ha
+            )
+            if not any(polygons_intersect(polygon.points, ring) for ring in reserve_rings):
+                return polygon
+        raise ValueError(f"No fue posible ubicar la finca {farm_code} fuera de las reservas.")
+
     def generate_farm_reserve_overlaps(
         self,
         farms: list[dict[str, Any]],
         forest_reserves: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Genera vínculos de solapamiento entre fincas y reservas protegidas."""
+        """Genera solapamientos finca-reserva a partir de la intersección espacial real.
+
+        Para cada par (finca, reserva) cuyos polígonos comparten área se guarda la
+        geometría de intersección (``overlap_geometry``, EWKT SRID 4326) y su área en
+        hectáreas calculada sobre esa geometría (ver ``ring_area_ha``).
+        """
         overlaps: list[dict[str, Any]] = []
         if not forest_reserves:
             return overlaps
 
+        reserves = [
+            (reserve, _ring_from_geojson(reserve.get("polygon_geojson")))
+            for reserve in forest_reserves
+        ]
         for farm in farms:
-            if farm.get("overlaps_reserve", False):
-                reserve = forest_reserves[0]
+            farm_ring = _ring_from_geojson(farm.get("polygon_geojson"))
+            if not farm_ring:
+                continue
+            for reserve, reserve_ring in reserves:
+                if not reserve_ring or not polygons_intersect(farm_ring, reserve_ring):
+                    continue
+                intersection = polygon_intersection(farm_ring, reserve_ring)
+                if intersection is None:
+                    continue
                 natural_key = f"{farm['farm_code']}:{reserve['reserve_code']}"
                 overlaps.append(
                     {
@@ -555,14 +665,9 @@ class AgroSenseFakerGenerator:
                         "farm_id": farm["farm_id"],
                         "reserve_id": reserve["reserve_id"],
                         "reserve_name": reserve.get("name", "Reserva Forestal Protectora Nacional"),
-                        "overlap_geometry": farm.get(
-                            "geom_ewkt",
-                            (
-                                "SRID=4326;POLYGON((-75.7 5.5, -75.69 5.5, "
-                                "-75.69 5.51, -75.7 5.51, -75.7 5.5))"
-                            ),
-                        ),
-                        "overlap_area_ha": round(self.rng.uniform(0.5, 3.5), 2),
+                        "overlap_geometry": f"SRID=4326;{polygon_to_wkt(intersection)}",
+                        # DECIMAL(10,2) in data_structure.md
+                        "overlap_area_ha": round(ring_area_ha(intersection), 2),
                         "deforestation_free_status": "NON_COMPLIANT",
                         "verified_at": "2026-10-13T05:00:00Z",
                     }

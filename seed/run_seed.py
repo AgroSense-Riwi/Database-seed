@@ -9,17 +9,15 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
-
-from faker import Faker
 
 from seed.api_writer import write_api_dataset
 from seed.defect_factory import DefectFactory, DefectReport
 from seed.faker_generators import AgroSenseFakerGenerator
 from seed.records import generate_sample_seed_records, generate_spatial_seed_records
+from seed.reproducibility import set_reproducible_state
 from seed.upsert_engine import (
     UpsertEngine,
     calculate_database_checksum,
@@ -71,27 +69,6 @@ class SeedConfig:
     force_extreme_rain: int = 8
     emit_bronze: bool = False
     bronze_path: str = "./data/bronze"
-
-
-def set_reproducible_state(seed: int) -> None:
-    """Fija la semilla en los generadores globales para garantizar reproducibilidad determinista.
-
-    Inicializa los generadores pseudoaleatorios del sistema con la semilla especificada,
-    cumpliendo con la especificación de reproducibilidad (Deliverable E-03, CT-06).
-
-    Args:
-        seed: Número entero para inicializar el estado del PRNG.
-    """
-    logger.debug("Fijando estado reproducible con semilla=%d", seed)
-    random.seed(seed)
-    try:
-        import numpy as np
-
-        np.random.seed(seed)
-    except ImportError:
-        pass
-    Faker.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 def validate_defect_rate(val: str) -> float:
@@ -186,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # 2. Definición del parser con descripción del entregable
     parser = argparse.ArgumentParser(
-        prog="run_seed.py",
+        prog="python -m seed",
         description=(
             "AgroSense Café - Ejecutor reproducible e idempotente de datos sintéticos. "
             "Puebla la base de datos PostgreSQL y las capas de almacenamiento (Data Lake Bronze)."
@@ -231,7 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--reset",
         action="store_true",
         default=env_reset,
-        help="Limpia las tablas y reinicia secuencias antes de sembrar (TRUNCATE CASCADE).",
+        help=(
+            "Limpia las tablas y reinicia secuencias antes de sembrar (TRUNCATE CASCADE). "
+            "Solo se ejecuta en bases *_test_db o si SEED_RESET_CONFIRM_DB coincide con "
+            "el nombre de la base de datos conectada."
+        ),
     )
 
     # Argumento: --batch-size
@@ -522,44 +503,36 @@ def run_seed(
             summary["defects_by_code"],
         )
 
-        # 4. Motor de Idempotencia UPSERT y preparación de sentencias SQL
+        # 4. Comprobación en memoria (nivel unitario) de claves de negocio únicas.
+        #    NO certifica CT-06 contra PostgreSQL: eso lo hace la prueba de integración
+        #    tests/test_integration_postgres.py (dos ejecuciones + checksums SQL).
         engine = UpsertEngine(batch_size=config.batch_size)
-
         if config.reset:
-            truncate_stmt = engine.build_truncate_sql()
-            logger.info("Modo --reset activo: Limpieza atómica preparada:\n  %s", truncate_stmt)
-            reset_database_state()
-
-        # Aplicar datos en el almacén de base de datos simulado (emula ejecución SQL)
+            reset_database_state()  # solo limpia el almacén simulado en memoria
         engine.apply_dataset_upsert(dataset)
 
-        sql_statements = engine.build_all_upsert_statements(dataset)
-        total_stmts = sum(len(stmts) for stmts in sql_statements.values())
-        logger.info(
-            "Sentencias UPSERT (ON CONFLICT) en 5 niveles topológicos: %d en %d tablas.",
-            total_stmts,
-            len(sql_statements),
-        )
-
-        # 4. Certificación estricta de idempotencia y verificación de no-inflación de filas (CT-06)
         idempotency_report = engine.verify_idempotency(dataset)
         if not idempotency_report["is_idempotent"] or idempotency_report["row_inflation_detected"]:
-            logger.error("Fallo crítico: Violación de idempotencia detectada en la verificación.")
+            logger.error("Claves de negocio duplicadas detectadas en la simulación en memoria.")
             return 1
-
         logger.info(
-            "Certificación CT-06 aprobada: 0 inflación de filas y 0 duplicados en %d tablas.",
+            "Simulación UPSERT en memoria (unitaria) sin inflación en %d colecciones.",
             idempotency_report["tables_tested"],
         )
 
+        # 5. Escritura real en PostgreSQL (INSERT ... ON CONFLICT ejecutado por la BD)
         database_url = os.getenv("DATABASE_URL")
         if database_url:
-            write_api_dataset(clean_dataset, database_url, reset=config.reset)
-            logger.info("Dataset compatible con la API escrito en PostgreSQL.")
+            written = write_api_dataset(clean_dataset, database_url, reset=config.reset)
+            logger.info(
+                "Dataset compatible con la API escrito en PostgreSQL (%d filas en %d tablas).",
+                sum(written.values()),
+                len(written),
+            )
         else:
             logger.info("DATABASE_URL no está configurada; se omite la escritura en PostgreSQL.")
 
-        # 5. Geometrías espaciales de muestra para diagnóstico CLI
+        # 6. Geometrías espaciales de muestra para diagnóstico CLI
         sample_data, reserve_data = generate_spatial_seed_records(
             generate_sample_seed_records(count=min(5, farms_count)), seed=config.seed
         )
@@ -570,7 +543,7 @@ def run_seed(
             4326,
         )
 
-        # 6. Exportar capas Bronze si está solicitado
+        # 7. Exportar capas Bronze si está solicitado
         if config.emit_bronze:
             emit_bronze_layers(dataset, base_path=config.bronze_path)
 

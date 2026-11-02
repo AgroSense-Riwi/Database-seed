@@ -8,6 +8,11 @@ from typing import Any
 Point = tuple[float, float]
 Ring = list[Point]
 
+# Metres per degree used by the polygon generator (seed.spatial). Re-used here so
+# that areas computed back from a generated ring match the requested hectares.
+METERS_PER_DEGREE = 111139.0
+COORD_DECIMALS = 6
+
 
 def validate_ring(points: Ring) -> None:
     """Validate a closed, non-degenerate, non-self-intersecting WGS84 ring."""
@@ -149,3 +154,53 @@ def polygons_intersect(poly_a: Ring, poly_b: Ring) -> bool:
         for start_a, end_a in zip(poly_a, poly_a[1:], strict=False)
         for start_b, end_b in zip(poly_b, poly_b[1:], strict=False)
     )
+
+
+def ring_area_ha(points: Ring) -> float:
+    """Approximate the area of a WGS84 ring in hectares.
+
+    Projection: local equirectangular (tangent plane) centred on the ring's mean
+    latitude, x = lon * M * cos(lat0), y = lat * M with M = 111 139 m/deg (the same
+    constant the polygon generator uses). For farm-sized polygons (< ~5 km) in the
+    Colombian coffee belt (lat 1-11 deg) the difference to a geodesic area
+    (PostGIS ``ST_Area(geom::geography)``) is well below 1 %.
+    """
+    if len(points) < 4:
+        return 0.0
+    lat0 = sum(lat for _, lat in points[:-1]) / (len(points) - 1)
+    kx = METERS_PER_DEGREE * math.cos(math.radians(lat0))
+    ky = METERS_PER_DEGREE
+    doubled = sum(
+        (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky)
+        for (x1, y1), (x2, y2) in zip(points, points[1:], strict=False)
+    )
+    return abs(doubled) / 2.0 / 10_000.0
+
+
+def polygon_intersection(poly_a: Ring, poly_b: Ring) -> Ring | None:
+    """Return the exact intersection of two simple polygons as a closed ring.
+
+    Uses shapely (GEOS, the same engine as PostGIS ``ST_Intersection``). Returns
+    ``None`` when the polygons do not share a positive area or when the result is
+    not a single valid Polygon after rounding to 6 decimals (the API column is a
+    ``POLYGON``, not a ``MULTIPOLYGON``).
+    """
+    from shapely.geometry import Polygon
+
+    inter = Polygon(poly_a).intersection(Polygon(poly_b))
+    if inter.is_empty or inter.geom_type != "Polygon" or inter.area <= 0:
+        return None
+    ring: Ring = []
+    for x, y in inter.exterior.coords:
+        point = (round(x, COORD_DECIMALS), round(y, COORD_DECIMALS))
+        if not ring or ring[-1] != point:
+            ring.append(point)
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    try:
+        validate_ring(ring)
+    except ValueError:
+        return None
+    if not Polygon(ring).is_valid:
+        return None
+    return ring
