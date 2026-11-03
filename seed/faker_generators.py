@@ -844,7 +844,7 @@ class AgroSenseFakerGenerator:
             batch_code = batch["batch_code"]
             batch_id = batch["batch_id"]
 
-            # Asignar 2 a 4 entregas por lote y cuadrar RN-08 (SUM(contributed_kg) == total_weight_kg)
+            # Asignar entregas por lote y cuadrar RN-08 (SUM(contributed_kg) == total_weight_kg)
             batch_comps: list[dict[str, Any]] = []
             for j in range(2):
                 deliv_idx = (i * 2 + j) % len(deliveries)
