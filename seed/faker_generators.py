@@ -844,7 +844,8 @@ class AgroSenseFakerGenerator:
             batch_code = batch["batch_code"]
             batch_id = batch["batch_id"]
 
-            # Asignar 2 a 4 entregas por lote
+            # Asignar 2 a 4 entregas por lote y cuadrar RN-08 (SUM(contributed_kg) == total_weight_kg)
+            batch_comps: list[dict[str, Any]] = []
             for j in range(2):
                 deliv_idx = (i * 2 + j) % len(deliveries)
                 delivery = deliveries[deliv_idx]
@@ -854,20 +855,34 @@ class AgroSenseFakerGenerator:
                 contrib_weight = round(delivery["delivered_weight_kg"] * 0.9, 2)
                 plot_id = delivery.get("plot_id") or self.get_uuid5(f"FIN-{i + 1:04d}:PLOT-1")
 
-                compositions.append(
-                    {
-                        "composition_id": composition_id,
-                        "batch_id": batch_id,
-                        "delivery_id": delivery_id,
-                        "farm_id": delivery["farm_id"],
-                        "plot_id": plot_id,
-                        "contributed_weight_kg": contrib_weight,
-                        "contributed_kg": contrib_weight,
-                        "contribution_pct": 50.0,
-                        "share_percentage": 50.0,
-                        "reception_date": "2026-10-10",
-                    }
+                comp = {
+                    "composition_id": composition_id,
+                    "batch_id": batch_id,
+                    "delivery_id": delivery_id,
+                    "farm_id": delivery["farm_id"],
+                    "plot_id": plot_id,
+                    "contributed_weight_kg": contrib_weight,
+                    "contributed_kg": contrib_weight,
+                    "contribution_pct": 50.0,
+                    "share_percentage": 50.0,
+                    "reception_date": "2026-10-10",
+                }
+                batch_comps.append(comp)
+                compositions.append(comp)
+
+            batch_total = round(sum(c["contributed_kg"] for c in batch_comps), 2)
+            if batch_total > 0:
+                batch["total_weight_kg"] = batch_total
+                batch["traced_weight_kg"] = batch_total
+                for c in batch_comps:
+                    pct = round((c["contributed_kg"] / batch_total) * 100.0, 2)
+                    c["contribution_pct"] = pct
+                    c["share_percentage"] = pct
+                diff = round(100.0 - sum(c["share_percentage"] for c in batch_comps), 2)
+                batch_comps[-1]["share_percentage"] = round(
+                    batch_comps[-1]["share_percentage"] + diff, 2
                 )
+                batch_comps[-1]["contribution_pct"] = batch_comps[-1]["share_percentage"]
         return compositions
 
     def generate_buyer_batch_contracts(
